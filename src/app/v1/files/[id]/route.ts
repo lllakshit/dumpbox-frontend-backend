@@ -2,6 +2,7 @@ import { z } from "zod"
 import { requireUser } from "@/lib/api/auth"
 import { BUCKET } from "@/lib/api/files"
 import { ApiError, fromDb, handler, noContent, ok } from "@/lib/api/http"
+import { viaProxy } from "@/lib/env"
 
 const SIGNED_URL_SECONDS = 60 * 60
 
@@ -25,8 +26,8 @@ export const GET = handler(async (request: Request, ctx: RouteContext<"/v1/files
   if (view.error || download.error) throw new ApiError("not_found", "File content not found")
   return ok({
     file: { id: file.id, item_id: file.item_id, file_name: file.file_name, mime_type: file.mime_type, size_bytes: file.size_bytes },
-    view_url: view.data.signedUrl,
-    download_url: download.data.signedUrl,
+    view_url: viaProxy(view.data.signedUrl),
+    download_url: viaProxy(download.data.signedUrl),
     expires_in: SIGNED_URL_SECONDS,
   })
 })

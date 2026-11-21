@@ -2,6 +2,7 @@ import { BUCKET } from "@/lib/api/files"
 import { ApiError, handler, ok } from "@/lib/api/http"
 import { hashShareToken, SHARE_TOKEN_RE } from "@/lib/api/share-token"
 import { isValidFilePath } from "@/lib/api/storage-admin"
+import { viaProxy } from "@/lib/env"
 import { adminClient } from "@/lib/supabase/server"
 
 /** Fields a share recipient may see. Owner ids, tags, collections and other items are never returned. */
@@ -110,8 +111,8 @@ export const GET = handler(async (_request: Request, ctx: RouteContext<"/v1/publ
             size_bytes: f.size_bytes,
             width: f.width,
             height: f.height,
-            view_url: view?.data?.signedUrl ?? null,
-            download_url: download?.data?.signedUrl ?? null,
+            view_url: viaProxy(view?.data?.signedUrl),
+            download_url: viaProxy(download?.data?.signedUrl),
           }
         }),
       ),

@@ -3,6 +3,7 @@ import { BUCKET, MAX_FILE_BYTES, isBlockedFile, storagePath } from "@/lib/api/fi
 import { ApiError, fromDb, handler, ok, readJson } from "@/lib/api/http"
 import { getItem } from "@/lib/api/items"
 import { uploadRequestSchema } from "@/lib/api/schemas"
+import { viaProxy } from "@/lib/env"
 
 /**
  * POST /v1/uploads — step 1 of attaching a file: checks type and size and returns a one-time signed upload URL.
@@ -43,7 +44,7 @@ export const POST = handler(async (request: Request) => {
     {
       file_id: fileId,
       storage_path: path,
-      upload_url: signed.signedUrl,
+      upload_url: viaProxy(signed.signedUrl),
       upload_token: signed.token,
       max_bytes: MAX_FILE_BYTES,
       duplicate_of: duplicateOf,

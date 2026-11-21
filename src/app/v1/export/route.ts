@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/api/auth"
 import { BUCKET } from "@/lib/api/files"
 import { fromDb, handler, ok, searchParams } from "@/lib/api/http"
 import { ITEM_SELECT, toApiItem, type ItemRow } from "@/lib/api/items"
+import { viaProxy } from "@/lib/env"
 
 const PAGE = 500
 const LINK_SECONDS = 24 * 60 * 60
@@ -37,7 +38,7 @@ export const GET = handler(async (request: Request) => {
   const all = [...paths.values()]
   for (let i = 0; i < all.length; i += 500) {
     const { data: signed } = await db.storage.from(BUCKET).createSignedUrls(all.slice(i, i + 500), LINK_SECONDS, { download: true })
-    for (const s of signed ?? []) if (s.path && s.signedUrl) links.set(s.path, s.signedUrl)
+    for (const s of signed ?? []) if (s.path && s.signedUrl) links.set(s.path, viaProxy(s.signedUrl))
   }
 
   let tags: unknown[] | undefined

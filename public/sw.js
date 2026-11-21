@@ -1,5 +1,5 @@
 /* DumpBox service worker: keeps the app shell available offline. API calls are never cached. */
-const CACHE = "dumpbox-shell-v1"
+const CACHE = "dumpbox-shell-v2"
 const SHELL = ["/", "/login", "/manifest.webmanifest", "/icon.svg"]
 
 self.addEventListener("install", (event) => {
@@ -20,7 +20,7 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return
   const url = new URL(req.url)
   if (url.origin !== self.location.origin) return
-  if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/auth/") || url.pathname.startsWith("/s/")) return
+  if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/sb/") || url.pathname.startsWith("/auth/") || url.pathname.startsWith("/s/")) return
 
   // Hashed build assets never change: cache first.
   if (url.pathname.startsWith("/_next/static/")) {

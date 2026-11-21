@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useRouter } from "next/navigation"
 import { api, ApiFailure, uploadFile } from "@/lib/client/api"
 import { feedCache, outbox, type Pending } from "@/lib/client/outbox"
-import { browserSupabase } from "@/lib/client/supabase"
+import { browserSupabase, liveSupabase } from "@/lib/client/supabase"
 import { inView, TYPE_LABEL, viewQuery, viewTitle, type Collection, type Item, type ItemType, type Tag, type View } from "@/lib/client/types"
 import { CollectionsPanel } from "./CollectionsPanel"
 import { classifyText, Composer, type Capture } from "./Composer"
@@ -114,7 +114,7 @@ export function DumpBoxApp() {
         router.replace("/login")
       } else {
         setUserId(session.user.id)
-        sb.realtime.setAuth(session.access_token)
+        liveSupabase().realtime.setAuth(session.access_token)
       }
     })
     return () => data.subscription.unsubscribe()
@@ -236,7 +236,6 @@ export function DumpBoxApp() {
   useEffect(() => {
     if (!userId) return
     pull()
-    const sb = browserSupabase()
     let timer: ReturnType<typeof setTimeout> | null = null
     const nudge = () => {
       if (timer) clearTimeout(timer)
@@ -245,19 +244,36 @@ export function DumpBoxApp() {
         refreshLists()
       }, 250)
     }
-    const channel = sb
-      .channel(`items:${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "items", filter: `user_id=eq.${userId}` }, nudge)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "item_tombstones", filter: `user_id=eq.${userId}` }, nudge)
-      .subscribe()
+    // Instant updates when the direct realtime connection works; otherwise check every 15 s while the tab is visible.
+    let live = false
+    const live$ = liveSupabase()
+    let channel: ReturnType<typeof live$.channel> | null = null
+    browserSupabase()
+      .auth.getSession()
+      .then(({ data }) => {
+        if (!data.session) return
+        live$.realtime.setAuth(data.session.access_token)
+        channel = live$
+          .channel(`items:${userId}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "items", filter: `user_id=eq.${userId}` }, nudge)
+          .on("postgres_changes", { event: "INSERT", schema: "public", table: "item_tombstones", filter: `user_id=eq.${userId}` }, nudge)
+          .subscribe((status) => {
+            live = status === "SUBSCRIBED"
+          })
+      })
     const onFocus = () => nudge()
     window.addEventListener("focus", onFocus)
-    const interval = setInterval(nudge, 60_000)
+    let ticks = 0
+    const interval = setInterval(() => {
+      ticks++
+      if (document.visibilityState !== "visible") return
+      if (!live || ticks % 4 === 0) nudge()
+    }, 15_000)
     return () => {
       window.removeEventListener("focus", onFocus)
       clearInterval(interval)
       if (timer) clearTimeout(timer)
-      sb.removeChannel(channel)
+      if (channel) live$.removeChannel(channel)
     }
   }, [userId, pull, refreshLists])
 

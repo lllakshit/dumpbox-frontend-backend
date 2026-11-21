@@ -19,3 +19,16 @@ export function assertPublicEnv() {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
   }
 }
+
+/**
+ * Turns a URL on the Supabase project (for example a signed file URL) into the same URL through this app's /sb proxy,
+ * so clients on networks that block *.supabase.co can still use it.
+ */
+export function viaProxy(url: string): string
+export function viaProxy(url: string | null | undefined): string | null
+export function viaProxy(url: string | null | undefined): string | null {
+  if (!url) return null
+  const base = publicEnv.supabaseUrl.replace(/\/$/, "")
+  const rest = base && url.startsWith(base) ? url.slice(base.length) : null
+  return rest !== null && (rest === "" || rest.startsWith("/") || rest.startsWith("?")) ? `${publicEnv.appUrl}/sb${rest}` : url
+}
