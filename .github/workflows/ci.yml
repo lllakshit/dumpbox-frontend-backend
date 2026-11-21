@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Lint, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+  database-and-api:
+    name: Database tests and end-to-end API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+      - run: npm ci
+      - name: Start local Supabase (applies every migration)
+        # Only what the tests use. Image pulls are sometimes rate-limited, so retry from a clean state.
+        run: |
+          for attempt in 1 2 3; do
+            if supabase start -x studio,edge-runtime,logflare,vector,imgproxy,supavisor,postgres-meta,mailpit,realtime; then exit 0; fi
+            echo "supabase start failed (attempt $attempt); cleaning up and retrying"
+            supabase stop --no-backup || true
+            sleep $((attempt * 20))
+          done
+          exit 1
+      - name: Database tests (row-level security, triggers, search)
+        run: supabase test db
+      - name: Read local keys
+        run: |
+          supabase status -o env > .supabase.env
+          echo "NEXT_PUBLIC_SUPABASE_URL=$(grep '^API_URL=' .supabase.env | cut -d= -f2- | tr -d '"')" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$(grep '^PUBLISHABLE_KEY=' .supabase.env | cut -d= -f2- | tr -d '"')" >> "$GITHUB_ENV"
+          echo "SUPABASE_SECRET_KEY=$(grep '^SECRET_KEY=' .supabase.env | cut -d= -f2- | tr -d '"')" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_APP_URL=http://localhost:3000" >> "$GITHUB_ENV"
+          echo "CRON_SECRET=ci-cron-secret" >> "$GITHUB_ENV"
+      - run: npm run build
+      - name: Start the app
+        run: |
+          npx next start -p 3000 > app.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000/v1/health && break; sleep 1; done
+      - run: npm run test:api
+      - name: App log on failure
+        if: failure()
+        run: cat app.log || true
