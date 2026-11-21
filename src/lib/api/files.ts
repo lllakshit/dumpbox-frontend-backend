@@ -22,7 +22,8 @@ export function extensionOf(name: string): string {
 }
 
 export function isBlockedFile(name: string, mime: string): boolean {
-  return BLOCKED_EXTENSIONS.has(extensionOf(name)) || BLOCKED_MIME.some((re) => re.test(mime))
+  const type = mime.split(";")[0].trim()
+  return BLOCKED_EXTENSIONS.has(extensionOf(name)) || BLOCKED_MIME.some((re) => re.test(type))
 }
 
 /** Keeps storage keys ASCII and predictable; the original name is kept in the files table. */

@@ -1,62 +1,68 @@
+import { z } from "zod"
 import { requireUser } from "@/lib/api/auth"
 import { BUCKET } from "@/lib/api/files"
-import { fromDb, handler, ok } from "@/lib/api/http"
+import { fromDb, handler, ok, searchParams } from "@/lib/api/http"
 import { ITEM_SELECT, toApiItem, type ItemRow } from "@/lib/api/items"
 
-const PAGE = 1000
+const PAGE = 500
 const LINK_SECONDS = 24 * 60 * 60
 
 /**
- * GET /v1/export — everything in the account as one JSON document: items (trash included), tags, collections and
- * file details with download links valid for 24 hours.
+ * GET /v1/export?page=0 — everything in the account as JSON, in pages of 500 items (trash included) so each
+ * response stays small. Page 0 also carries tags and collections. Keep reading while `next_page` is not null.
+ * File details include download links valid for 24 hours.
  */
 export const GET = handler(async (request: Request) => {
   const { db } = await requireUser(request)
+  const page = z.coerce.number().int().min(0).max(100_000).default(0).parse(searchParams(request).get("page") ?? undefined)
 
-  const rows: ItemRow[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
-      .from("items")
-      .select(ITEM_SELECT)
-      .order("created_at", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) throw fromDb(error)
-    rows.push(...(data as unknown as ItemRow[]))
-    if (!data || data.length < PAGE) break
+  const { data, error } = await db
+    .from("items")
+    .select(ITEM_SELECT)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .range(page * PAGE, page * PAGE + PAGE)
+  if (error) throw fromDb(error)
+  const rows = (data as unknown as ItemRow[]).slice(0, PAGE)
+  const hasMore = (data?.length ?? 0) > PAGE
+
+  const ids = rows.map((r) => r.id)
+  const paths = new Map<string, string>()
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: files, error: fe } = await db.from("files").select("id,storage_path").in("item_id", ids.slice(i, i + 200))
+    if (fe) throw fromDb(fe)
+    for (const f of files ?? []) paths.set(f.id as string, f.storage_path as string)
   }
-
-  const [tags, collections, files] = await Promise.all([
-    db.from("tags").select("id,name,color,created_at").order("name"),
-    db.from("collections").select("id,name,description,created_at").order("name"),
-    db.from("files").select("id,storage_path"),
-  ])
-  if (tags.error) throw fromDb(tags.error)
-  if (collections.error) throw fromDb(collections.error)
-  if (files.error) throw fromDb(files.error)
-
   const links = new Map<string, string>()
-  const paths = (files.data ?? []).map((f) => f.storage_path as string)
-  for (let i = 0; i < paths.length; i += 500) {
-    const { data } = await db.storage.from(BUCKET).createSignedUrls(paths.slice(i, i + 500), LINK_SECONDS, { download: true })
-    for (const s of data ?? []) if (s.path && s.signedUrl) links.set(s.path, s.signedUrl)
+  const all = [...paths.values()]
+  for (let i = 0; i < all.length; i += 500) {
+    const { data: signed } = await db.storage.from(BUCKET).createSignedUrls(all.slice(i, i + 500), LINK_SECONDS, { download: true })
+    for (const s of signed ?? []) if (s.path && s.signedUrl) links.set(s.path, s.signedUrl)
   }
-  const pathById = new Map((files.data ?? []).map((f) => [f.id as string, f.storage_path as string]))
 
-  const exportedAt = new Date().toISOString()
-  return ok(
-    {
-      format: "dumpbox-export",
-      version: 1,
-      exported_at: exportedAt,
-      items: rows.map((r) => {
-        const item = toApiItem(r)
-        return { ...item, files: item.files.map((f) => ({ ...f, download_url: links.get(pathById.get(f.id) ?? "") ?? null })) }
-      }),
-      tags: tags.data ?? [],
-      collections: collections.data ?? [],
-    },
-    200,
-    { "Content-Disposition": `attachment; filename="dumpbox-export-${exportedAt.slice(0, 10)}.json"` },
-  )
+  let tags: unknown[] | undefined
+  let collections: unknown[] | undefined
+  if (page === 0) {
+    const [t, c] = await Promise.all([
+      db.from("tags").select("id,name,color,created_at").order("name"),
+      db.from("collections").select("id,name,description,created_at").order("name"),
+    ])
+    if (t.error) throw fromDb(t.error)
+    if (c.error) throw fromDb(c.error)
+    tags = t.data ?? []
+    collections = c.data ?? []
+  }
+
+  return ok({
+    format: "dumpbox-export",
+    version: 1,
+    exported_at: new Date().toISOString(),
+    page,
+    next_page: hasMore ? page + 1 : null,
+    items: rows.map((r) => {
+      const item = toApiItem(r)
+      return { ...item, files: item.files.map((f) => ({ ...f, download_url: links.get(paths.get(f.id) ?? "") ?? null })) }
+    }),
+    ...(tags ? { tags, collections } : {}),
+  })
 })

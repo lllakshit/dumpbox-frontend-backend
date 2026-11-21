@@ -366,7 +366,12 @@ export const openapi = {
       },
     },
     "/v1/export": {
-      get: { tags: ["Account"], summary: "Export everything as JSON", responses: { 200: json({ type: "object" }), 401: err } },
+      get: {
+        tags: ["Account"],
+        summary: "Export everything as JSON, 500 items per page",
+        parameters: [{ name: "page", in: "query", schema: { type: "integer", minimum: 0, default: 0 } }],
+        responses: { 200: json({ type: "object", properties: { next_page: { type: ["integer", "null"] } } }), 401: err },
+      },
     },
     "/v1/health": {
       get: { tags: ["Account"], summary: "Liveness", security: [], responses: { 200: json({ type: "object" }) } },

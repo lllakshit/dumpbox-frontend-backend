@@ -1,6 +1,7 @@
 import { BUCKET } from "@/lib/api/files"
 import { ApiError, handler, ok } from "@/lib/api/http"
 import { hashShareToken, SHARE_TOKEN_RE } from "@/lib/api/share-token"
+import { isValidFilePath } from "@/lib/api/storage-admin"
 import { adminClient } from "@/lib/supabase/server"
 
 /** Fields a share recipient may see. Owner ids, tags, collections and other items are never returned. */
@@ -40,7 +41,7 @@ export const GET = handler(async (_request: Request, ctx: RouteContext<"/v1/publ
   const admin = adminClient()
   const { data: share, error } = await admin
     .from("share_links")
-    .select("id,user_id,item_id,collection_id,allow_download,expires_at,revoked_at,open_count")
+    .select("id,user_id,item_id,collection_id,allow_download,expires_at,revoked_at")
     .eq("token_hash", hashShareToken(token))
     .maybeSingle()
   if (error) throw new ApiError("internal_error", "Could not open the link")
@@ -79,10 +80,7 @@ export const GET = handler(async (_request: Request, ctx: RouteContext<"/v1/publ
   }
 
   // Count the open; a failure here must not block the recipient.
-  await admin
-    .from("share_links")
-    .update({ open_count: (share.open_count as number) + 1, last_opened_at: new Date().toISOString() })
-    .eq("id", share.id)
+  await admin.rpc("count_share_open", { p_id: share.id })
 
   const bucket = admin.storage.from(BUCKET)
   const items = await Promise.all(
@@ -97,8 +95,12 @@ export const GET = handler(async (_request: Request, ctx: RouteContext<"/v1/publ
       created_at: r.created_at,
       files: await Promise.all(
         (r.files ?? []).map(async (f) => {
-          const view = await bucket.createSignedUrl(f.storage_path, SIGNED_SECONDS)
-          const download = share.allow_download
+          // Sign only paths that match the strict owner/item/file shape (no "..", no other folders).
+          const safe = isValidFilePath(f.storage_path, share.user_id as string, r.id, f.id)
+          // View-only links show images, audio, video and PDFs in the page; other files are not offered.
+          const viewable = /^(image\/(png|jpe?g|gif|webp|avif|heic)|audio\/|video\/|application\/pdf$)/i.test(f.mime_type)
+          const view = safe && (share.allow_download || viewable) ? await bucket.createSignedUrl(f.storage_path, SIGNED_SECONDS) : null
+          const download = safe && share.allow_download
             ? await bucket.createSignedUrl(f.storage_path, SIGNED_SECONDS, { download: f.file_name })
             : null
           return {
@@ -108,7 +110,7 @@ export const GET = handler(async (_request: Request, ctx: RouteContext<"/v1/publ
             size_bytes: f.size_bytes,
             width: f.width,
             height: f.height,
-            view_url: view.data?.signedUrl ?? null,
+            view_url: view?.data?.signedUrl ?? null,
             download_url: download?.data?.signedUrl ?? null,
           }
         }),

@@ -215,6 +215,22 @@ describe("files", () => {
     const big = await A("POST", "/v1/uploads", { item_id: item.id, file_name: "big.zip", mime_type: "application/zip", size_bytes: 60 * 1024 * 1024 })
     expect(big.status).toBe(413)
 
+    // A path with "..", or any other shape, is refused before anything is looked up
+    const traversal = await A("POST", `/v1/items/${item.id}/files`, {
+      file_id: up.json.file_id,
+      storage_path: `${up.json.storage_path.split("/")[0]}/../x/${item.id}/${up.json.file_id}-a.pdf`,
+      file_name: "a.pdf",
+      mime_type: "application/pdf",
+    })
+    expect(traversal.status).toBe(400)
+
+    // The type Storage really holds is checked, not just the claimed one
+    const sneaky = (await A("POST", "/v1/items", { type: "file" })).json.item
+    const up2 = await A("POST", "/v1/uploads", { item_id: sneaky.id, file_name: "pic.png", mime_type: "image/png", size_bytes: 20 })
+    await fetch(up2.json.upload_url, { method: "PUT", headers: { "content-type": "text/html" }, body: "<script>alert(1)</script>" })
+    const reg2 = await A("POST", `/v1/items/${sneaky.id}/files`, { file_id: up2.json.file_id, storage_path: up2.json.storage_path, file_name: "pic.png", mime_type: "image/png" })
+    expect(reg2.status).toBe(415)
+
     // Registering a path that was never uploaded fails
     const ghost = await A("POST", `/v1/items/${item.id}/files`, {
       file_id: randomUUID(),
@@ -274,6 +290,7 @@ describe("account", () => {
     expect(me.json.usage.items).toBeGreaterThan(0)
     const ex = await A("GET", "/v1/export")
     expect(ex.json.format).toBe("dumpbox-export")
+    expect(ex.json.next_page).toBeNull()
     expect(ex.json.items.length).toBeGreaterThan(0)
   })
   it("deletes an account only with confirmation", async () => {

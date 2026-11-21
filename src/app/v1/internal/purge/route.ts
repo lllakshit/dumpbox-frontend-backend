@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto"
-import { BUCKET } from "@/lib/api/files"
+import { removeObjects } from "@/lib/api/storage-admin"
 import { ApiError, handler, ok } from "@/lib/api/http"
 import { requireServerEnv } from "@/lib/env"
 import { adminClient } from "@/lib/supabase/server"
@@ -32,11 +32,20 @@ export const GET = handler(async (request: Request) => {
     if (error) throw new ApiError("internal_error", "Could not list trash")
     if (!items?.length) break
     const ids = items.map((i) => i.id as string)
-    const { data: files } = await admin.from("files").select("storage_path").in("item_id", ids)
-    const paths = (files ?? []).map((f) => f.storage_path as string)
+    // Page through the files of this batch; stop (and keep the items) if anything fails, so no file is orphaned.
+    const paths: string[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: files, error: fe } = await admin.from("files").select("storage_path").in("item_id", ids).order("id").range(from, from + 999)
+      if (fe) throw new ApiError("internal_error", "Could not list files")
+      paths.push(...(files ?? []).map((f) => f.storage_path as string))
+      if (!files || files.length < 1000) break
+    }
     if (paths.length) {
-      const { error: se } = await admin.storage.from(BUCKET).remove(paths)
-      if (se) throw new ApiError("internal_error", "Could not remove files")
+      try {
+        await removeObjects(admin, paths)
+      } catch {
+        throw new ApiError("internal_error", "Could not remove files")
+      }
       removedFiles += paths.length
     }
     const { error: de } = await admin.from("items").delete().in("id", ids)

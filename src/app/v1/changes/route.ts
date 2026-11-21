@@ -8,6 +8,7 @@ const EPOCH = "1970-01-01T00:00:00Z"
 const ZERO_ID = "00000000-0000-0000-0000-000000000000"
 /** Re-read window for transactions that commit slightly after a later timestamp was handed out. */
 const OVERLAP_MS = 5_000
+const MAX_PAGE_BYTES = 3_000_000
 const TOMBSTONE_KEEP_MS = 85 * 86_400_000
 
 function minus(iso: string, ms: number) {
@@ -60,9 +61,17 @@ export const GET = handler(async (request: Request) => {
 
   const rows = itemsRes.data as unknown as ItemRow[]
   const tombs = (tombRes.data ?? []) as { item_id: string; deleted_at: string }[]
-  const itemPage = rows.slice(0, q.limit)
+  // Keep each page well under the 4.5 MB serverless response limit: stop early when items are large.
+  const itemPage: ItemRow[] = []
+  let bytes = 0
+  for (const r of rows.slice(0, q.limit)) {
+    const size = JSON.stringify(r).length
+    if (itemPage.length > 0 && bytes + size > MAX_PAGE_BYTES) break
+    itemPage.push(r)
+    bytes += size
+  }
   const tombPage = tombs.slice(0, q.limit)
-  const hasMore = rows.length > q.limit || tombs.length > q.limit
+  const hasMore = rows.length > itemPage.length || tombs.length > q.limit
 
   const lastItem = itemPage.at(-1)
   const lastTomb = tombPage.at(-1)

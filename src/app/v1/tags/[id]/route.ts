@@ -12,9 +12,8 @@ export const PATCH = handler(async (request: Request, ctx: RouteContext<"/v1/tag
   if (error) throw fromDb(error, "Tag not found")
   if (!data) throw new ApiError("not_found", "Tag not found")
   // Items carrying the tag must reach other devices with the new name.
-  const { data: links } = await db.from("item_tags").select("item_id").eq("tag_id", id)
-  const itemIds = (links ?? []).map((l) => l.item_id as string)
-  if (itemIds.length) await db.from("items").update({ updated_at: new Date().toISOString() }).in("id", itemIds)
+  const { error: te } = await db.rpc("touch_tag_items", { p_tag: id })
+  if (te) throw fromDb(te)
   return ok({ tag: data })
 })
 

@@ -1,7 +1,7 @@
 -- Database tests: run with `supabase test db`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(25);
+select plan(27);
 
 -- Two users
 insert into auth.users (id, email, aud, role) values
@@ -68,6 +68,18 @@ select is((select count(*)::int from public.search_items('jaipur')), 0, 'trashed
 delete from public.items where id = 'aaaaaaaa-0000-0000-0000-000000000003';
 select ok(exists(select 1 from public.item_tombstones where item_id = 'aaaaaaaa-0000-0000-0000-000000000003'),
   'permanent delete records a tombstone');
+
+-- File rows cannot be written directly by users (only the API does it, after checks)
+select throws_ok($$ insert into public.files (item_id, storage_path, file_name, mime_type, size_bytes)
+  values ('aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111/../22222222-2222-2222-2222-222222222222/x', 'x.pdf', 'application/pdf', 1) $$,
+  '42501', null, 'users cannot insert file rows');
+reset role;
+select throws_ok($$ insert into public.files (id, item_id, user_id, storage_path, file_name, mime_type, size_bytes)
+  values ('bbbbbbbb-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+          '11111111-1111-1111-1111-111111111111/../22222222-2222-2222-2222-222222222222/bbbbbbbb-0000-0000-0000-000000000001-x.pdf', 'x.pdf', 'application/pdf', 1) $$,
+  '42501', 'invalid storage path', 'even the server cannot store a path with ".."');
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
 
 -- Type cannot change
 select throws_ok($$ update public.items set type = 'link' where id = 'aaaaaaaa-0000-0000-0000-000000000001' $$,

@@ -1,18 +1,14 @@
 import { requireUser } from "@/lib/api/auth"
-import { BUCKET } from "@/lib/api/files"
+import { listUserObjects, removeObjects } from "@/lib/api/storage-admin"
 import { ApiError, fromDb, handler, noContent, ok, readJson } from "@/lib/api/http"
 import { profileSchema } from "@/lib/api/schemas"
 import { adminClient } from "@/lib/supabase/server"
 
 async function usage(db: Awaited<ReturnType<typeof requireUser>>["db"]) {
-  const [items, files] = await Promise.all([
-    db.from("items").select("id", { count: "exact", head: true }).is("deleted_at", null),
-    db.from("files").select("size_bytes"),
-  ])
-  if (items.error) throw fromDb(items.error)
-  if (files.error) throw fromDb(files.error)
-  const bytes = (files.data ?? []).reduce((sum, f) => sum + Number(f.size_bytes ?? 0), 0)
-  return { items: items.count ?? 0, files: files.data?.length ?? 0, storage_bytes: bytes }
+  const { data, error } = await db.rpc("account_usage").single()
+  if (error) throw fromDb(error)
+  const u = data as { items: number; files: number; storage_bytes: number }
+  return { items: Number(u.items), files: Number(u.files), storage_bytes: Number(u.storage_bytes) }
 }
 
 /** GET /v1/me — profile and usage. */
@@ -53,12 +49,11 @@ export const DELETE = handler(async (request: Request) => {
   if (body?.confirm !== "DELETE") throw new ApiError("validation_failed", 'Send {"confirm":"DELETE"} to delete the account')
 
   const admin = adminClient()
-  const { data: files, error } = await admin.from("files").select("storage_path").eq("user_id", userId)
-  if (error) throw new ApiError("internal_error", "Could not list files")
-  const paths = (files ?? []).map((f) => f.storage_path as string)
-  for (let i = 0; i < paths.length; i += 500) {
-    const { error: se } = await admin.storage.from(BUCKET).remove(paths.slice(i, i + 500))
-    if (se) throw new ApiError("internal_error", "Could not remove stored files; try again")
+  // Everything in the user's folder, including uploads that were never registered.
+  try {
+    await removeObjects(admin, await listUserObjects(admin, userId))
+  } catch {
+    throw new ApiError("internal_error", "Could not remove stored files; try again")
   }
   const { error: de } = await admin.auth.admin.deleteUser(userId)
   if (de) throw new ApiError("internal_error", "Could not delete the account; try again")

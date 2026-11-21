@@ -86,7 +86,19 @@ export const api = {
     }>("GET", "/v1/me"),
   updateMe: (body: Record<string, unknown>) => call("PATCH", "/v1/me", body),
   deleteMe: () => call<void>("DELETE", "/v1/me", { confirm: "DELETE" }),
-  exportAll: () => call<unknown>("GET", "/v1/export"),
+  /** Reads every export page and returns one document. */
+  exportAll: async () => {
+    type Page = { next_page: number | null; items: unknown[]; tags?: unknown[]; collections?: unknown[]; exported_at: string }
+    const first = await call<Page>("GET", "/v1/export?page=0")
+    const items = [...first.items]
+    let next = first.next_page
+    while (next !== null) {
+      const p = await call<Page>("GET", `/v1/export?page=${next}`)
+      items.push(...p.items)
+      next = p.next_page
+    }
+    return { format: "dumpbox-export", version: 1, exported_at: first.exported_at, items, tags: first.tags ?? [], collections: first.collections ?? [] }
+  },
 }
 
 /** Hex SHA-256 of a file, for duplicate detection. */

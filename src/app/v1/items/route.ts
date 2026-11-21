@@ -1,6 +1,7 @@
 import { requireUser } from "@/lib/api/auth"
 import { decodeCursor, encodeCursor, isFeedCursor, keysetBefore } from "@/lib/api/cursor"
 import { ApiError, fromDb, handler, ok, readJson, searchParams } from "@/lib/api/http"
+import type { SupabaseClient } from "@supabase/supabase-js"
 import { ITEM_SELECT, getItem, setItemCollections, setItemTags, toApiItem, type ItemRow } from "@/lib/api/items"
 import { createItemSchema, listItemsSchema } from "@/lib/api/schemas"
 import { fetchLinkPreview } from "@/lib/link-preview"
@@ -66,7 +67,7 @@ export const POST = handler(async (request: Request) => {
   if (input.id) {
     const { data: existing, error } = await db.from("items").select("id").eq("id", input.id).maybeSingle()
     if (error) throw fromDb(error)
-    if (existing) return ok({ item: await getItem(db, input.id), created: false })
+    if (existing) return ok({ item: await completeRetry(db, input.id, input.tags, input.collection_ids), created: false })
   }
 
   const preview = input.type === "link" && input.url ? await fetchLinkPreview(input.url) : null
@@ -94,7 +95,8 @@ export const POST = handler(async (request: Request) => {
   const { data, error } = await db.from("items").insert(row).select("id").single()
   if (error) {
     // Same id inserted by a parallel retry: return what is there.
-    if (error.code === "23505" && input.id) return ok({ item: await getItem(db, input.id), created: false })
+    if (error.code === "23505" && input.id)
+      return ok({ item: await completeRetry(db, input.id, input.tags, input.collection_ids), created: false })
     throw fromDb(error)
   }
 
@@ -105,3 +107,17 @@ export const POST = handler(async (request: Request) => {
   if (!item) throw new ApiError("internal_error", "Item was not saved")
   return ok({ item, created: true }, 201)
 })
+
+/**
+ * A retried capture whose first attempt saved the item but not its tags or collections: add what is missing
+ * (never removes anything the user changed since).
+ */
+async function completeRetry(db: SupabaseClient, id: string, tags?: string[], collectionIds?: string[]) {
+  const item = await getItem(db, id)
+  const tagNames = item.tags.map((t) => t.name)
+  const missingTags = (tags ?? []).filter((t) => !tagNames.some((n) => n.toLowerCase() === t.trim().toLowerCase()))
+  if (missingTags.length) await setItemTags(db, id, [...tagNames, ...missingTags])
+  const missingCols = (collectionIds ?? []).filter((c) => !item.collection_ids.includes(c))
+  if (missingCols.length) await setItemCollections(db, id, [...item.collection_ids, ...missingCols])
+  return missingTags.length || missingCols.length ? getItem(db, id) : item
+}

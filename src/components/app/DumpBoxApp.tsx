@@ -270,7 +270,9 @@ export function DumpBoxApp() {
         applyItems([item])
         setLocals((cur) => cur.filter((l) => l.item.id !== p.id))
       } catch (e) {
-        if (e instanceof ApiFailure && e.offline) return
+        // Keep it for later on network trouble, an expired session, rate limits and server errors.
+        if (e instanceof ApiFailure && (e.offline || e.status === 401 || e.status === 408 || e.status === 429 || e.status >= 500)) return
+        if (!(e instanceof ApiFailure)) return
         outbox.update(p.id, { attempts: p.attempts + 1, error: e instanceof Error ? e.message : "failed" })
         setLocals((cur) => cur.map((l) => (l.item.id === p.id ? { ...l, state: "failed", error: e instanceof Error ? e.message : undefined } : l)))
         outbox.remove(p.id)

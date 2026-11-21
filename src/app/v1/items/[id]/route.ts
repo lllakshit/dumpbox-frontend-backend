@@ -33,7 +33,9 @@ export const PATCH = handler(async (request: Request, ctx: RouteContext<"/v1/ite
   if (input.pinned !== undefined) patch.pinned = input.pinned
   if (input.starred !== undefined) patch.starred = input.starred
   if (input.archived !== undefined) patch.archived_at = input.archived ? (before.archived_at ?? new Date().toISOString()) : null
-  if (before.type === "note" && "body" in patch && !String(patch.body ?? "").trim() && !String(patch.title ?? before.title ?? "").trim())
+  const finalTitle = "title" in patch ? patch.title : before.title
+  const finalBody = "body" in patch ? patch.body : before.body
+  if (before.type === "note" && !String(finalBody ?? "").trim() && !String(finalTitle ?? "").trim())
     throw new ApiError("validation_failed", "A note needs text")
 
   const { error } = await db.from("items").update(patch).eq("id", id)
