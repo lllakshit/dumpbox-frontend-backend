@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:api": "vitest run --config vitest.api.config.mts",
     "test:db": "supabase test db",
-    "keepalive": "node scripts/keepalive.mjs"
+    "keepalive": "node scripts/keepalive.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.2",
