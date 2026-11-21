@@ -45,7 +45,15 @@ jobs:
           version: 2.122.0
       - run: npm ci
       - name: Start local Supabase (applies every migration)
-        run: supabase start -x studio,edge-runtime,logflare,vector,imgproxy,supavisor,postgres-meta
+        # Only what the tests use. Image pulls are sometimes rate-limited, so retry from a clean state.
+        run: |
+          for attempt in 1 2 3; do
+            if supabase start -x studio,edge-runtime,logflare,vector,imgproxy,supavisor,postgres-meta,mailpit,realtime; then exit 0; fi
+            echo "supabase start failed (attempt $attempt); cleaning up and retrying"
+            supabase stop --no-backup || true
+            sleep $((attempt * 20))
+          done
+          exit 1
       - name: Database tests (row-level security, triggers, search)
         run: supabase test db
       - name: Read local keys

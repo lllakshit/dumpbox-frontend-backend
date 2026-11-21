@@ -45,6 +45,8 @@ language sql
 stable
 security invoker
 set search_path = ''
+-- One wrong or missing letter ("invoce", "recipt") scores 0.5-0.6; the default cut-off of 0.6 misses them.
+set pg_trgm.word_similarity_threshold = 0.5
 as $$
   with q as (
     select

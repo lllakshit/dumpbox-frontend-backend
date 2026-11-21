@@ -1,7 +1,7 @@
 -- Database tests: run with `supabase test db`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(25);
 
 -- Two users
 insert into auth.users (id, email, aud, role) values
@@ -45,6 +45,8 @@ select ok(exists(select 1 from public.search_items('electricity') where item_id 
   'full-text search finds a note');
 select ok(exists(select 1 from public.search_items('electrcity') where item_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
   'typo-tolerant search finds a note');
+select ok(exists(select 1 from public.search_items('octber') where item_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
+  'one-letter typo still matches');
 select ok(exists(select 1 from public.search_items('electr') where item_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
   'prefix search finds a note');
 select ok(exists(select 1 from public.search_items('bills') where item_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
