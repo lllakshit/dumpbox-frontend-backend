@@ -59,8 +59,9 @@ Open http://localhost:3000, enter any email, and read the code at http://127.0.0
 2. Apply the schema: `supabase link --project-ref <ref>` then `supabase db push` (or let the *Database migrations*
    workflow do it, see CI/CD).
 3. **Auth → Providers → Email:** enabled, *Confirm email* on.
-4. **Auth → Email templates → Magic link** and **Confirm signup:** paste `supabase/templates/otp.html` (it shows the
-   6-digit `{{ .Token }}`). Set the OTP expiry to 600 seconds.
+4. **Auth → Email templates → Magic link** and **Confirm signup:** paste `supabase/templates/otp.html` (6-digit
+   `{{ .Token }}` plus a link to `/auth/confirm`, which never touches supabase.co). Needs custom SMTP on the free tier.
+   OTP length 6, expiry 600 seconds.
 5. **Auth → URL configuration:** Site URL = your Vercel URL; add `<site>/auth/callback` and
    `dumpbox://login-callback` (mobile) to redirect URLs.
 6. **Google (optional):** create an OAuth client in Google Cloud, set the redirect URI to
@@ -92,6 +93,14 @@ One versioned REST API at `/v1`, documented in OpenAPI at `/v1/openapi.json`. Au
   and the previous text goes to version history.
 - Sync: `GET /v1/changes` (full) or `?since=<token>`; repeat while `has_more`. `reset: true` means drop the cache.
 - Files: `POST /v1/uploads` → `PUT` bytes to `upload_url` → `POST /v1/items/{id}/files`.
+
+## Networks that block supabase.co
+
+Some Indian internet providers block `*.supabase.co`. Browsers and phones therefore reach Supabase only through this
+app's domain: `/sb/*` is passed through to the project (`next.config.ts`), and every signed file URL the API hands
+out is rewritten onto `/sb` (`viaProxy` in `src/lib/env.ts`). Realtime needs a WebSocket, which the proxy cannot carry,
+so it connects directly when it can; otherwise the apps check for changes every 15–20 seconds. The mobile app's
+`SUPABASE_URL` variable is `https://<app domain>/sb`.
 
 ## Security notes
 

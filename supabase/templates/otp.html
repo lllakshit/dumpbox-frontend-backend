@@ -1,4 +1,6 @@
 <h2>Your DumpBox sign-in code</h2>
-<p>Enter this code to sign in. It expires in 10 minutes.</p>
+<p>Enter this code in the DumpBox app or website. It expires in 10 minutes.</p>
 <p style="font-size:28px;font-weight:700;letter-spacing:6px">{{ .Token }}</p>
-<p>If you did not ask for this code, you can ignore this email.</p>
+<p>Or sign in on the website with this link:<br>
+<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email">Sign in to DumpBox</a></p>
+<p>If you did not ask for this, you can ignore this email.</p>
