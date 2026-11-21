@@ -296,7 +296,14 @@ describe("account", () => {
   it("deletes an account only with confirmation", async () => {
     const c = await makeUser()
     const C = api(c.token)
-    await C("POST", "/v1/items", { type: "note", body: "temp" })
+    await C("POST", "/v1/items", { type: "note", body: "temp", tags: ["one", "two"] })
+    const col = (await C("POST", "/v1/collections", { name: "c" })).json.collection
+    const withFile = (await C("POST", "/v1/items", { type: "file", collection_ids: [col.id] })).json.item
+    const bytes = Buffer.from("%PDF-1.4 bye")
+    const up = await C("POST", "/v1/uploads", { item_id: withFile.id, file_name: "bye.pdf", mime_type: "application/pdf", size_bytes: bytes.length })
+    await fetch(up.json.upload_url, { method: "PUT", headers: { "content-type": "application/pdf" }, body: bytes })
+    await C("POST", `/v1/items/${withFile.id}/files`, { file_id: up.json.file_id, storage_path: up.json.storage_path, file_name: "bye.pdf", mime_type: "application/pdf" })
+    await C("POST", "/v1/shares", { item_id: withFile.id })
     expect((await C("DELETE", "/v1/me", {})).status).toBe(400)
     expect((await C("DELETE", "/v1/me", { confirm: "DELETE" })).status).toBe(204)
   })
