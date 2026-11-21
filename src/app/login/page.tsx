@@ -25,14 +25,19 @@ export default function LoginPage() {
     e?.preventDefault()
     setError(null)
     setBusy(true)
-    const { error: err } = await browserSupabase().auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } })
+    const { error: err } = await browserSupabase().auth.signInWithOtp({
+      email: email.trim(),
+      // The email holds a sign-in link (and a 6-digit code once a custom email template is set up). The link must be
+      // opened in this same browser.
+      options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/auth/callback` },
+    })
     setBusy(false)
     if (err) {
       setError(err.status === 429 ? "Too many requests. Wait a minute and try again." : err.message)
       return
     }
     setStep("code")
-    setInfo(`We sent a 6-digit code to ${email.trim()}. It expires in 10 minutes.`)
+    setInfo(`Check ${email.trim()}: open the sign-in link in this browser, or type the 6-digit code if the email shows one. It expires in 10 minutes.`)
   }
 
   async function verify(e: FormEvent) {
@@ -86,7 +91,7 @@ export default function LoginPage() {
                 placeholder="you@example.com"
               />
               <button disabled={busy} className="w-full rounded-xl bg-accent px-4 py-2.5 font-medium text-accent-ink disabled:opacity-60">
-                {busy ? "Sending…" : "Send sign-in code"}
+                {busy ? "Sending…" : "Email me a sign-in link"}
               </button>
             </form>
           ) : (

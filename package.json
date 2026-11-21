@@ -10,7 +10,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:api": "vitest run --config vitest.api.config.mts",
-    "test:db": "supabase test db"
+    "test:db": "supabase test db",
+    "keepalive": "node scripts/keepalive.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.2",

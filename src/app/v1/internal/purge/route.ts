@@ -21,6 +21,8 @@ function authorized(request: Request) {
 export const GET = handler(async (request: Request) => {
   if (!authorized(request)) throw new ApiError("unauthorized", "Not allowed")
   const admin = adminClient()
+  // Also counts as database activity, so the project is not paused for being idle.
+  await admin.rpc("keepalive", { p_source: "vercel-cron" })
   const cutoff = new Date(Date.now() - TRASH_DAYS * 86_400_000).toISOString()
 
   let removedItems = 0
