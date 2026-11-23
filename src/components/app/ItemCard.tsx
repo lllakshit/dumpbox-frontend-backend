@@ -1,5 +1,6 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { api } from "@/lib/client/api"
 import type { FileMeta, Item } from "@/lib/client/types"
 import { Icon } from "./icons"
@@ -79,18 +80,51 @@ export function ItemCard({
 }) {
   const [menu, setMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null)
   useEffect(() => {
     if (!menu) return
     const close = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(false)
+      const t = e.target as Node
+      if (!menuRef.current?.contains(t) && !popRef.current?.contains(t)) setMenu(false)
     }
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false)
+    // The menu floats above the page, so it would drift away from its card when the feed scrolls or the window resizes.
+    const dismiss = (e: Event) => {
+      if (!popRef.current?.contains(e.target as Node)) setMenu(false)
+    }
     document.addEventListener("mousedown", close)
     document.addEventListener("keydown", esc)
+    window.addEventListener("scroll", dismiss, true)
+    window.addEventListener("resize", dismiss)
     return () => {
       document.removeEventListener("mousedown", close)
       document.removeEventListener("keydown", esc)
+      window.removeEventListener("scroll", dismiss, true)
+      window.removeEventListener("resize", dismiss)
     }
+  }, [menu])
+
+  // Place the menu next to its button, inside the window: below when there is room, otherwise above.
+  useLayoutEffect(() => {
+    if (!menu) return
+    const btn = menuRef.current?.getBoundingClientRect()
+    const pop = popRef.current
+    if (!btn || !pop) return
+    const gap = 6
+    const margin = 8
+    const vh = window.innerHeight
+    const vw = window.innerWidth
+    const h = pop.scrollHeight
+    const w = pop.offsetWidth
+    const below = vh - btn.bottom - gap - margin
+    const above = btn.top - gap - margin
+    const openUp = h > below && above > below
+    const maxHeight = Math.max(120, openUp ? above : below)
+    const shown = Math.min(h, maxHeight)
+    const top = openUp ? btn.top - gap - shown : btn.bottom + gap
+    const left = Math.min(Math.max(margin, btn.left), vw - w - margin)
+    setPos({ top, left, maxHeight })
   }, [menu])
 
   const trashed = Boolean(item.deleted_at)
@@ -156,7 +190,10 @@ export function ItemCard({
         {!pending && !selectable ? (
           <div ref={menuRef} className="absolute -left-10 top-1">
             <button
-              onClick={() => setMenu((m) => !m)}
+              onClick={() => {
+                setPos(null)
+                setMenu((m) => !m)
+              }}
               className="rounded-lg p-1.5 text-ink-3 opacity-100 hover:bg-panel-2 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100"
               aria-label="Item actions"
               aria-haspopup="menu"
@@ -164,8 +201,14 @@ export function ItemCard({
             >
               <Icon.more />
             </button>
-            {menu ? (
-              <div role="menu" className="absolute left-0 top-8 z-30 w-48 overflow-hidden rounded-xl border border-line bg-panel py-1 shadow-[var(--shadow)]">
+            {menu && typeof document !== "undefined" ? createPortal(
+              <div
+                ref={popRef}
+                role="menu"
+                aria-label="Item actions"
+                className="scroll-thin fixed z-50 w-48 overflow-y-auto rounded-xl border border-line bg-panel py-1 shadow-[var(--shadow)]"
+                style={pos ? { top: pos.top, left: pos.left, maxHeight: pos.maxHeight } : { top: 0, left: 0, visibility: "hidden" }}
+              >
                 {actions.map((a) => (
                   <button
                     key={a.key}
@@ -179,7 +222,8 @@ export function ItemCard({
                     {a.label}
                   </button>
                 ))}
-              </div>
+              </div>,
+              document.body,
             ) : null}
           </div>
         ) : null}
