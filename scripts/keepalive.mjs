@@ -14,6 +14,7 @@ import { appendFileSync } from "node:fs"
 
 const env = process.env
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+let tokenProblem = null
 const lines = []
 const log = (msg) => {
   console.log(msg)
@@ -48,7 +49,17 @@ async function ensureActive() {
     log("Status check skipped (no SUPABASE_ACCESS_TOKEN / SUPABASE_PROJECT_REF)")
     return
   }
-  let status = await projectStatus()
+  let status
+  try {
+    status = await projectStatus()
+  } catch (e) {
+    // The status check is only needed to wake a paused project. Do not let a bad or expired access token stop the
+    // heartbeat itself: warn loudly, then try the write below (which fails the run if the project really is paused).
+    tokenProblem = e instanceof Error ? e.message : String(e)
+    log(`WARNING: could not read project status (${tokenProblem}). Update the SUPABASE_ACCESS_TOKEN secret.`)
+    console.log(`::warning title=Supabase access token::${tokenProblem}. Update the SUPABASE_ACCESS_TOKEN secret; paused projects cannot be woken until then.`)
+    return
+  }
   log(`Project status: ${status}`)
   if (status === "ACTIVE_HEALTHY") return
 
@@ -106,6 +117,11 @@ try {
   await ping()
   await appHealth()
   summary()
+  // The heartbeat worked, but a bad access token still needs fixing: end with an error so GitHub emails about it.
+  if (tokenProblem) {
+    console.error(`Heartbeat OK, but the access token is not working (${tokenProblem}).`)
+    process.exit(2)
+  }
 } catch (e) {
   log(`FAILED: ${e instanceof Error ? e.message : e}`)
   summary()
