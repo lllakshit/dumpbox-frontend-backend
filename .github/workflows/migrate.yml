@@ -1,8 +1,8 @@
 name: Database migrations
 
 # Applies supabase/migrations to the hosted project. Runs on main after CI passes, or by hand.
-# Needs repository secrets: SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF, SUPABASE_DB_PASSWORD.
-# Without them the job only reports that it was skipped.
+# Uses only the database password (secret SUPABASE_DB_PASSWORD) and project ref (SUPABASE_PROJECT_REF), through
+# Supabase's IPv4 session pooler. It needs no Supabase access token, so there is nothing that expires.
 on:
   workflow_run:
     workflows: [CI]
@@ -20,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      DB_POOLER_HOST: ${{ vars.SUPABASE_DB_POOLER_HOST }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,19 +30,17 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: 2.122.0
-      - name: Check secrets
+      - name: Check settings
         id: check
         run: |
-          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$PROJECT_REF" ] || [ -z "$SUPABASE_DB_PASSWORD" ]; then
-            echo "Supabase secrets are not set; skipping migrations." >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$DB_PASSWORD" ] || [ -z "$PROJECT_REF" ] || [ -z "$DB_POOLER_HOST" ]; then
+            echo "Missing SUPABASE_DB_PASSWORD / SUPABASE_PROJECT_REF secrets or SUPABASE_DB_POOLER_HOST variable; skipping migrations." >> "$GITHUB_STEP_SUMMARY"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Link project
-        if: steps.check.outputs.skip != 'true'
-        run: supabase link --project-ref "$PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
-      - name: Show pending migrations
-        if: steps.check.outputs.skip != 'true'
-        run: supabase migration list --password "$SUPABASE_DB_PASSWORD"
       - name: Apply migrations
         if: steps.check.outputs.skip != 'true'
-        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+        run: |
+          ENC=$(python3 -c 'import os,urllib.parse;print(urllib.parse.quote(os.environ["DB_PASSWORD"], safe=""))')
+          URL="postgresql://postgres.${PROJECT_REF}:${ENC}@${DB_POOLER_HOST}:5432/postgres"
+          supabase migration list --db-url "$URL"
+          supabase db push --db-url "$URL"
