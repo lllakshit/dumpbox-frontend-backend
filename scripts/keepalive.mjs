@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Keeps the Supabase project awake, and wakes it if it was paused.
+ * Keeps the Supabase project awake with a heartbeat write (public key only). If a Supabase access token is also
+ * provided, it additionally wakes a paused project; without one, that part is skipped.
  *
  * 1. If SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_REF are set: reads the project status from the Management API.
  *    If the project is paused, asks Supabase to restore it and waits (up to 10 minutes) until it is healthy.
