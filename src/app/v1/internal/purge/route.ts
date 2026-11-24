@@ -56,5 +56,9 @@ export const GET = handler(async (request: Request) => {
   const tombCutoff = new Date(Date.now() - TOMBSTONE_DAYS * 86_400_000).toISOString()
   await admin.from("item_tombstones").delete().lt("deleted_at", tombCutoff)
 
-  return ok({ removed_items: removedItems, removed_files: removedFiles })
+  // Planner entries in the bin for 90 days (devices away that long start a fresh sync).
+  const { data: purged, error: pe } = await admin.from("planner_entries").delete().lt("deleted_at", tombCutoff).select("id")
+  if (pe) throw new ApiError("internal_error", "Could not remove old planner entries")
+
+  return ok({ removed_items: removedItems, removed_files: removedFiles, removed_planner_entries: purged?.length ?? 0 })
 })

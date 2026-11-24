@@ -180,9 +180,18 @@ export const changesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(500),
 })
 
+export const plannerPrefsSchema = z.object({
+  week_start: z.union([z.literal(0), z.literal(1), z.literal(6)]),
+  default_event_minutes: z.number().int().min(5).max(1440),
+  default_event_reminders: z.array(z.number().int().min(0).max(40_320)).max(5),
+  default_task_reminders: z.array(z.number().int().min(0).max(40_320)).max(5),
+  all_day_reminder_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+})
+
 export const profileSchema = z
   .object({
     name: z.string().trim().max(100).optional(),
     time_zone: z.string().max(64).optional(),
+    planner: plannerPrefsSchema.partial().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Nothing to update")
