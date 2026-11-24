@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from "node:crypto"
 import { requireUser } from "@/lib/api/auth"
 import { fromDb, handler, noContent, ok } from "@/lib/api/http"
-import { publicEnv } from "@/lib/env"
-
-function feedUrls(token: string) {
-  const base = publicEnv.appUrl
+/** Built from the address the request came in on, so the phone gets the same host it already reaches. */
+function feedUrls(request: Request, token: string) {
+  const u = new URL(request.url)
+  const host = request.headers.get("x-forwarded-host") ?? u.host
+  const proto = request.headers.get("x-forwarded-proto") ?? u.protocol.replace(":", "")
+  const base = `${proto}://${host}`
   return { json_url: `${base}/v1/planner/feed?token=${token}`, ics_url: `${base}/v1/planner/feed?token=${token}&format=ics` }
 }
 
@@ -18,7 +20,7 @@ export const POST = handler(async (request: Request) => {
   const token_hash = createHash("sha256").update(token).digest("hex")
   const { error } = await db.from("planner_feed_tokens").upsert({ user_id: userId, token_hash, created_at: new Date().toISOString(), last_used_at: null }, { onConflict: "user_id" })
   if (error) throw fromDb(error)
-  return ok({ token, ...feedUrls(token) }, 201)
+  return ok({ token, ...feedUrls(request, token) }, 201)
 })
 
 /** GET /v1/planner/feed-token — whether an address exists (the token itself cannot be shown again). */
