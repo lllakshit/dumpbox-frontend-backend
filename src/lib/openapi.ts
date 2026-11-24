@@ -318,9 +318,14 @@ export const openapi = {
       },
     },
     "/v1/planner/feed-token": {
-      get: { tags: ["Calendar and tasks"], summary: "Whether a secret calendar address exists", responses: { 200: json({ type: "object", properties: { active: { type: "boolean" }, created_at: { type: ["string", "null"] }, last_used_at: { type: ["string", "null"] } } }), ...errors } },
-      post: { tags: ["Calendar and tasks"], summary: "Make or replace the secret calendar address (token shown once)", responses: { 201: json({ type: "object", properties: { token: { type: "string" }, json_url: { type: "string" }, ics_url: { type: "string" } } }), ...errors } },
-      delete: { tags: ["Calendar and tasks"], summary: "Turn the secret calendar address off", responses: { 204: { description: "Off" }, ...errors } },
+      get: { tags: ["Calendar and tasks"], summary: "Secret calendar addresses (labels and dates, not the tokens)", responses: { 200: json({ type: "object", properties: { active: { type: "boolean" }, addresses: { type: "array", items: { type: "object" } } } }), ...errors } },
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Make a secret calendar address for one device or app (token shown once)",
+        requestBody: body({ type: "object", properties: { label: { type: "string" } } }),
+        responses: { 201: json({ type: "object", properties: { id: { type: "string" }, label: { type: "string" }, token: { type: "string" }, json_url: { type: "string" }, ics_url: { type: "string" } } }), ...errors },
+      },
+      delete: { tags: ["Calendar and tasks"], summary: "Turn one address off (`?id=`), or all", parameters: [{ name: "id", in: "query", schema: { type: "string", format: "uuid" } }], responses: { 204: { description: "Off" }, ...errors } },
     },
     "/v1/planner/feed": {
       get: {

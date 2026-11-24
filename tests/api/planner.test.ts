@@ -180,8 +180,10 @@ describe("planner", () => {
 describe("planner feed", () => {
   it("secret address reads only its owner's calendar and can be turned off", async () => {
     await A("POST", "/v1/planner/entries", { kind: "event", title: "Feed check", start_at: "2026-12-05T04:30:00Z" })
-    const t = await A("POST", "/v1/planner/feed-token")
+    const t = await A("POST", "/v1/planner/feed-token", { label: "Phone" })
     expect(t.status).toBe(201)
+    const other = await A("POST", "/v1/planner/feed-token", { label: "Google Calendar" })
+    expect((await A("GET", "/v1/planner/feed-token")).json.addresses.length).toBe(2)
     expect(t.json.ics_url).toContain("format=ics")
     const res = await fetch(`${BASE}/v1/planner/feed?token=${t.json.token}`)
     const body = await res.json()
@@ -192,7 +194,11 @@ describe("planner feed", () => {
     expect(ics).toContain("SUMMARY:Feed check")
     expect((await fetch(`${BASE}/v1/planner/feed?token=${"x".repeat(43)}`)).status).toBe(404)
     expect((await B("GET", "/v1/planner/feed-token")).json.active).toBe(false)
-    expect((await A("DELETE", "/v1/planner/feed-token")).status).toBe(204)
+    // Turning one address off leaves the other working.
+    expect((await A("DELETE", `/v1/planner/feed-token?id=${t.json.id}`)).status).toBe(204)
     expect((await fetch(`${BASE}/v1/planner/feed?token=${t.json.token}`)).status).toBe(404)
+    expect((await fetch(`${BASE}/v1/planner/feed?token=${other.json.token}`)).status).toBe(200)
+    expect((await B("DELETE", `/v1/planner/feed-token?id=${other.json.id}`)).status).toBe(204)
+    expect((await fetch(`${BASE}/v1/planner/feed?token=${other.json.token}`)).status).toBe(200)
   })
 })

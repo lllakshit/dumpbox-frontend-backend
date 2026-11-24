@@ -19,11 +19,11 @@ export const GET = handler(async (request: Request) => {
   if (!TOKEN_RE.test(token)) throw notFound
   const admin = adminClient()
   const hash = createHash("sha256").update(token).digest("hex")
-  const { data: row, error } = await admin.from("planner_feed_tokens").select("user_id").eq("token_hash", hash).maybeSingle()
+  const { data: row, error } = await admin.from("planner_feed_tokens").select("id,user_id").eq("token_hash", hash).maybeSingle()
   if (error) throw new ApiError("internal_error", "Could not read the calendar")
   if (!row) throw notFound
   const userId = row.user_id as string
-  await admin.from("planner_feed_tokens").update({ last_used_at: new Date().toISOString() }).eq("user_id", userId)
+  await admin.from("planner_feed_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", row.id as string)
 
   const entries: Entry[] = []
   for (let from = 0; from < 20_000; from += 1000) {
@@ -32,8 +32,20 @@ export const GET = handler(async (request: Request) => {
     entries.push(...((data ?? []) as unknown as Entry[]))
     if (!data || data.length < 1000) break
   }
+  // Keep the answer small (serverless responses are capped): leave out what can no longer remind or be shown as
+  // upcoming — tasks finished over 30 days ago and one-off events that ended over 60 days ago.
+  const doneCut = Date.now() - 30 * 86_400_000
+  const pastCut = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10)
+  const current = entries.filter((e) => {
+    if (e.completed_at && new Date(e.completed_at).getTime() < doneCut) return false
+    if (e.kind === "event" && !e.rrule) {
+      const end = e.end_date ?? e.start_date ?? (e.end_at ?? e.start_at ?? "").slice(0, 10)
+      if (end && end < pastCut) return false
+    }
+    return true
+  })
   if (sp.get("format") === "ics") {
-    return new Response(toIcs(entries, "DumpBox"), {
+    return new Response(toIcs(current, "DumpBox"), {
       headers: { "content-type": "text/calendar; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" },
     })
   }
@@ -42,5 +54,5 @@ export const GET = handler(async (request: Request) => {
     admin.auth.admin.getUserById(userId),
   ])
   const prefs = { ...DEFAULT_PREFS, ...((user?.user?.user_metadata?.planner as object | undefined) ?? {}) }
-  return ok({ entries, lists: lists ?? [], prefs, server_time: new Date().toISOString() })
+  return ok({ entries: current, lists: lists ?? [], prefs, server_time: new Date().toISOString() })
 })

@@ -144,7 +144,7 @@ export function CalendarView({ planner, onOpen }: { planner: Planner; onOpen: (t
   })
 
   const openOcc = (o: Occurrence) =>
-    onOpen({ entry: o.entry, occurrence: o.recurring ? { key: o.key, startDate: o.startDate, endDate: o.endDate, startTime: o.startTime, endTime: o.endTime } : undefined })
+    onOpen({ entry: o.entry, occurrence: o.recurring ? { key: o.key, allDay: o.allDay, start: o.start.toISOString(), end: o.end.toISOString(), startDate: o.startDate, endDate: o.endDate } : undefined })
 
   const newAt = (date: string, time?: string) => {
     if (!time) return onOpen({ draft: { kind: "event", all_day: true, start_date: date } })

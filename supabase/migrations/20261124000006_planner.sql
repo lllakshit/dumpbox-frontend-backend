@@ -163,11 +163,15 @@ alter publication supabase_realtime add table public.planner_lists;
 -- other calendar apps. Only a SHA-256 hash of the token is stored; it can be replaced or turned off at any time.
 -- ---------------------------------------------------------------------------
 create table public.planner_feed_tokens (
-  user_id uuid primary key default auth.uid() references auth.users (id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  -- Which device or app uses it ("Android phone", "Google Calendar"), so each can be turned off on its own.
+  label text not null default 'Calendar app' check (char_length(btrim(label)) between 1 and 80),
   token_hash text not null unique check (token_hash ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default now(),
   last_used_at timestamptz
 );
+create index planner_feed_tokens_user_idx on public.planner_feed_tokens (user_id, created_at);
 
 alter table public.planner_feed_tokens enable row level security;
 create policy planner_feed_tokens_owner on public.planner_feed_tokens for all to authenticated

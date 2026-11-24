@@ -180,18 +180,22 @@ function monthDates(y: number, m: number, r: Rule, start: WallDate): WallDate[] 
 }
 
 /**
- * Every occurrence date of a rule from `start`, in order, up to `to` (inclusive). The first occurrence is always
- * `start` itself (as calendar apps do), even when it does not match BYDAY. Stops after `limit` dates.
+ * Occurrence dates of a rule from `start` (always the first occurrence, as calendar apps do, even when it does not
+ * match BYDAY), up to `to` inclusive. Dates before `from` are counted (for COUNT) but not returned, so a daily series
+ * started years ago stays cheap to show. Returns at most `limit` dates.
  */
-export function ruleDates(start: WallDate, r: Rule, to: WallDate, limit = 5000): WallDate[] {
-  const out: WallDate[] = [start]
+export function ruleDates(start: WallDate, r: Rule, to: WallDate, limit = 5000, from?: WallDate): WallDate[] {
+  const out: WallDate[] = []
   const last = r.until && r.until < to ? r.until : to
-  const max = Math.min(limit, r.count ?? Infinity)
-  const push = (d: WallDate) => {
-    if (d > start && d <= last && out.length < max) out.push(d)
+  const maxCount = r.count ?? Infinity
+  let seen = 0
+  const take = (d: WallDate) => {
+    seen++
+    if ((!from || d >= from) && out.length < limit) out.push(d)
   }
+  if (start <= last) take(start)
   const sp = dateParts(start)
-  for (let k = 0; k < 20000 && out.length < max; k++) {
+  for (let k = 0; k < 200000 && seen < maxCount && out.length < limit; k++) {
     let periodStart: WallDate
     let dates: WallDate[]
     if (r.freq === "DAILY") {
@@ -217,7 +221,9 @@ export function ruleDates(start: WallDate, r: Rule, to: WallDate, limit = 5000):
       dates.sort()
     }
     if (periodStart > last) break
-    for (const d of dates) push(d)
+    for (const d of dates) {
+      if (d > start && d <= last && seen < maxCount) take(d)
+    }
   }
   return out
 }
@@ -256,7 +262,7 @@ export function occurrences(entry: Entry, from: WallDate, to: WallDate, viewerTz
     const s = entry.start_date
     if (!s) return []
     const span = entry.end_date ? Math.max(0, diffDays(s, entry.end_date)) : 0
-    const dates = rule ? ruleDates(s, rule, to) : [s]
+    const dates = rule ? ruleDates(s, rule, to, limit + 5, addDays(from, -span)) : [s]
     for (const d of dates) {
       const e = addDays(d, span)
       if (e < from) continue
@@ -282,7 +288,8 @@ export function occurrences(entry: Entry, from: WallDate, to: WallDate, viewerTz
   const durMs = entry.end_at ? Math.max(0, new Date(entry.end_at).getTime() - startInstant.getTime()) : 0
   const wall = toWall(startInstant, tz)
   // Widen by a day on each side: zone differences can move an occurrence across the date line.
-  const dates = rule ? ruleDates(wall.date, rule, addDays(to, 1)) : [wall.date]
+  const spanDays = Math.ceil(durMs / 86_400_000) + 2
+  const dates = rule ? ruleDates(wall.date, rule, addDays(to, 1), limit + 5, addDays(from, -spanDays)) : [wall.date]
   for (const d of dates) {
     const s = rule ? fromWall(d, wall.time, tz) : startInstant
     const e = new Date(s.getTime() + durMs)

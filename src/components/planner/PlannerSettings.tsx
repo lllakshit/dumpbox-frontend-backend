@@ -109,37 +109,41 @@ export function PlannerSettings({ planner, onImport }: { planner: Planner; onImp
   )
 }
 
-/** Secret, read-only calendar address: for other calendar apps (Google Calendar → Add from URL). */
+type Address = { id: string; label: string; created_at: string; last_used_at: string | null }
+
+/** Secret, read-only calendar addresses: one per device or calendar app (Google Calendar → Add from URL). */
 function FeedAddress() {
-  const [state, setState] = useState<{ active: boolean; created_at: string | null } | null>(null)
+  const [list, setList] = useState<Address[] | null>(null)
   const [url, setUrl] = useState<string | null>(null)
+  const [label, setLabel] = useState("Google Calendar")
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const load = () =>
+    call<{ addresses: Address[] }>("GET", "/v1/planner/feed-token")
+      .then((r) => setList(r.addresses))
+      .catch(() => setList([]))
   useEffect(() => {
-    call<{ active: boolean; created_at: string | null }>("GET", "/v1/planner/feed-token")
-      .then(setState)
-      .catch(() => setState({ active: false, created_at: null }))
+    load()
   }, [])
   const make = async () => {
     setBusy(true)
     try {
-      const r = await call<{ ics_url: string }>("POST", "/v1/planner/feed-token")
+      const r = await call<{ ics_url: string }>("POST", "/v1/planner/feed-token", { label: label.trim() || "Calendar app" })
       setUrl(r.ics_url)
-      setState({ active: true, created_at: new Date().toISOString() })
-      setMsg("New address made. Any older address stops working.")
+      setMsg("Copy it now: it is shown only once.")
+      await load()
     } catch {
       setMsg("Could not make the address")
     } finally {
       setBusy(false)
     }
   }
-  const off = async () => {
+  const off = async (a: Address) => {
     setBusy(true)
     try {
-      await call("DELETE", "/v1/planner/feed-token")
-      setUrl(null)
-      setState({ active: false, created_at: null })
-      setMsg("Address turned off. The phone app makes a new one for its background reminders next time it syncs.")
+      await call("DELETE", `/v1/planner/feed-token?id=${a.id}`)
+      setMsg(`“${a.label}” turned off.`)
+      await load()
     } catch {
       setMsg("Could not turn it off")
     } finally {
@@ -148,10 +152,30 @@ function FeedAddress() {
   }
   return (
     <div className="rounded-xl border border-line p-3 text-sm">
-      <p className="font-medium">Secret calendar address</p>
+      <p className="font-medium">Secret calendar addresses</p>
       <p className="mt-1 text-ink-2">
-        A private, read-only link to your events and tasks (.ics). Add it in Google Calendar (Other calendars → From URL), Outlook or Apple Calendar to see DumpBox there. The phone app uses one too, for reminders while it is closed. Anyone with the link can read your calendar.
+        Private, read-only links to your events and tasks (.ics). Add one in Google Calendar (Other calendars → From URL), Outlook or Apple Calendar to see DumpBox there. The phone app makes its own for reminders while it is closed. Anyone with a link can read your calendar; turn off any you no longer use.
       </p>
+      {list?.length ? (
+        <ul className="mt-2 divide-y divide-line rounded-xl border border-line">
+          {list.map((a) => (
+            <li key={a.id} className="flex items-center gap-2 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{a.label}</span>
+                <span className="block text-xs text-ink-3">
+                  Made {a.created_at.slice(0, 10)}
+                  {a.last_used_at ? ` · last read ${a.last_used_at.slice(0, 16).replace("T", " ")}` : " · not read yet"}
+                </span>
+              </span>
+              <Button kind="ghost" onClick={() => off(a)} disabled={busy}>
+                Turn off
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-ink-3">{list ? "None yet." : "Loading…"}</p>
+      )}
       {url ? (
         <div className="mt-2 flex gap-2">
           <label htmlFor="feed-url" className="sr-only">
@@ -161,17 +185,15 @@ function FeedAddress() {
           <Button onClick={() => navigator.clipboard.writeText(url).then(() => setMsg("Copied"))}>Copy</Button>
         </div>
       ) : null}
-      <p className="mt-2 text-xs text-ink-3">{state?.active ? `On since ${state.created_at?.slice(0, 10) ?? ""}. The address is only shown when it is made.` : "Off"}</p>
       {msg ? <p className="mt-1 text-xs text-ink-2">{msg}</p> : null}
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label htmlFor="feed-label" className="sr-only">
+          Used by
+        </label>
+        <input id="feed-label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={80} placeholder="Used by (e.g. Google Calendar)" className="min-w-0 flex-1 rounded-xl border border-line bg-bg px-3 py-1.5 text-sm" />
         <Button onClick={make} disabled={busy}>
-          {state?.active ? "Make a new address" : "Make address"}
+          Make address
         </Button>
-        {state?.active ? (
-          <Button kind="ghost" onClick={off} disabled={busy}>
-            Turn off
-          </Button>
-        ) : null}
       </div>
     </div>
   )

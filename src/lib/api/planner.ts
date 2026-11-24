@@ -17,13 +17,15 @@ const rrule = z
   .refine((v) => parseRule(v) !== null, "Unsupported repeat rule")
   .transform((v) => formatRule(parseRule(v)!))
 const tz = z.string().max(64).refine(isTimeZone, "Unknown time zone")
+/** The database limits notes by bytes (UTF-8), not characters. */
+const notesText = z.string().refine((v) => new TextEncoder().encode(v).length <= 50_000, "Notes must be at most 50,000 bytes")
 
 const entryFields = {
   kind: z.enum(["event", "task"]),
   list_id: z.uuid().nullable(),
   parent_id: z.uuid().nullable(),
   title: z.string().trim().min(1).max(1000),
-  notes: z.string().max(50_000).nullable(),
+  notes: notesText.nullable(),
   location: z.string().max(1000).nullable(),
   all_day: z.boolean(),
   start_at: instant.nullable(),
@@ -162,9 +164,9 @@ export function defaultListId(lists: PlannerList[], kind: EntryKind): string | n
 export function listFor(lists: PlannerList[], kind: EntryKind, listId: string | null | undefined): string | null {
   const want = kind === "event" ? "calendar" : "tasks"
   if (listId) {
+    // A list deleted elsewhere (say, while the phone was offline) falls back to the default instead of failing.
     const l = lists.find((x) => x.id === listId)
-    if (!l) throw new ApiError("not_found", "Calendar or list not found")
-    if (l.kind === want) return l.id
+    if (l && l.kind === want) return l.id
   }
   return defaultListId(lists, kind)
 }
@@ -268,13 +270,24 @@ export async function patchEntry(
     }
   }
 
-  const { data, error } = await db.from("planner_entries").update(patch).eq("id", id).select(ENTRY_COLUMNS).maybeSingle()
+  // Finishing a repeating task only counts once: the update matches only while it is still open, so a second
+  // device completing it at the same moment does not make a second "next" copy.
+  let q = db.from("planner_entries").update(patch).eq("id", id)
+  if (nextRow) q = q.is("completed_at", null)
+  const { data, error } = await q.select(ENTRY_COLUMNS).maybeSingle()
   if (error) throw fromDb(error, "Entry not found")
-  if (!data) throw new ApiError("not_found", "Entry not found")
+  if (!data) {
+    if (nextRow) return { entry: await getEntry(db, id), next: null, merged: true }
+    throw new ApiError("not_found", "Entry not found")
+  }
   let next: Row | null = null
   if (nextRow) {
     const r = await db.from("planner_entries").insert(nextRow).select(ENTRY_COLUMNS).single()
-    if (r.error) throw fromDb(r.error)
+    if (r.error) {
+      // Put the repeat back so it is not lost.
+      await db.from("planner_entries").update({ completed_at: null, rrule: cur.rrule, exdates: cur.exdates }).eq("id", id)
+      throw fromDb(r.error)
+    }
     next = r.data as unknown as Row
   }
   // Removing a task removes its subtasks with it (and restoring brings them back).

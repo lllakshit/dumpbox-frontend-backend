@@ -4,6 +4,7 @@ import { describeRule, formatRule, parseRule, rulePresets, WD, type Rule } from 
 import { addDays, diffDays, fromWall, isTimeZone, minutesOf, timeFromMinutes, toWall, todayIn, weekday, zoneOffsetMinutes } from "@/lib/planner/time"
 import { REMINDER_CHOICES, reminderLabel, type Entry, type EntryKind, type PlannerList } from "@/lib/planner/types"
 import type { Planner } from "@/lib/client/planner"
+import { occurrenceDate, shiftExdates, splitSeries } from "@/lib/planner/series"
 import { Button, Modal } from "../app/ui"
 import { Icon } from "../app/icons"
 
@@ -11,7 +12,7 @@ export type EditorTarget = {
   /** Existing entry, or a draft for a new one. */
   entry?: Entry
   /** For a repeating event opened from the calendar: the occurrence that was clicked. */
-  occurrence?: { key: string; startDate: string; startTime?: string; endDate: string; endTime?: string }
+  occurrence?: { key: string; allDay: boolean; start: string; end: string; startDate: string; endDate: string }
   /** Prefill for new entries. */
   draft?: Partial<Entry> & { kind: EntryKind }
 }
@@ -75,10 +76,18 @@ function initialForm(t: EditorTarget, p: Planner): Form {
     if (kind === "task") allDay = true
   }
   if (occ) {
-    startDate = occ.startDate
-    endDate = occ.endDate
-    if (occ.startTime) startTime = occ.startTime
-    if (occ.endTime) endTime = occ.endTime
+    if (occ.allDay) {
+      startDate = occ.startDate
+      endDate = occ.endDate
+    } else {
+      // Shown and edited in the entry's own zone, like the rest of the form.
+      const s = toWall(new Date(occ.start), tz)
+      const en = toWall(new Date(occ.end), tz)
+      startDate = s.date
+      startTime = s.time
+      endDate = en.date
+      endTime = en.time
+    }
   }
   if (kind === "task" && !src?.start_at) allDay = true
   if (!hasDate && kind === "task") allDay = true
@@ -186,19 +195,23 @@ export function EntryEditor({ target, planner, onClose }: { target: EditorTarget
     } else if (!repeating || mode === "all") {
       let patch: Record<string, unknown> = { ...body, completed: f.kind === "task" ? f.completed : undefined }
       if (repeating && target.occurrence) {
-        // "All events": shift the whole series by how far this occurrence moved.
+        // "All events": shift the whole series (and its skipped dates) by how far this occurrence moved.
         const occ = target.occurrence
         if (f.allDay && entry!.start_date) {
-          const shift = diffDays(occ.startDate, f.startDate)
+          const shift = diffDays(occurrenceDate(entry!, occ, planner.tz), f.startDate)
           const span = Math.max(0, diffDays(f.startDate, f.endDate))
           const s = addDays(entry!.start_date, shift)
-          patch = { ...patch, start_date: s, end_date: span ? addDays(s, span) : null }
-        } else if (!f.allDay && entry!.start_at && occ.startTime) {
-          const occStart = fromWall(occ.startDate, occ.startTime, f.tz).getTime()
-          const shift = fromWall(f.startDate, f.startTime, f.tz).getTime() - occStart
+          patch = { ...patch, start_date: s, end_date: span ? addDays(s, span) : null, exdates: shiftExdates(entry!.exdates ?? [], { days: shift }) }
+        } else if (!f.allDay && entry!.start_at && !occ.allDay) {
+          const shift = fromWall(f.startDate, f.startTime, f.tz).getTime() - new Date(occ.start).getTime()
           const len = fromWall(f.endDate, f.endTime, f.tz).getTime() - fromWall(f.startDate, f.startTime, f.tz).getTime()
           const s = new Date(new Date(entry!.start_at).getTime() + shift)
-          patch = { ...patch, start_at: s.toISOString(), end_at: f.kind === "event" ? new Date(s.getTime() + Math.max(0, len)).toISOString() : null }
+          patch = {
+            ...patch,
+            start_at: s.toISOString(),
+            end_at: f.kind === "event" ? new Date(s.getTime() + Math.max(0, len)).toISOString() : null,
+            exdates: shiftExdates(entry!.exdates ?? [], { ms: shift }),
+          }
         }
       }
       ok = Boolean(await planner.update(entry!, patch))
@@ -207,16 +220,14 @@ export function EntryEditor({ target, planner, onClose }: { target: EditorTarget
       const made = await planner.create({ ...body, rrule: null })
       ok = Boolean(made) && Boolean(await planner.update(entry!, { exdates: [...new Set([...(entry!.exdates ?? []), target.occurrence!.key])] }))
     } else {
-      const rule = parseRule(entry!.rrule)
-      const until = addDays(target.occurrence!.startDate, -1)
-      // The new series starts here; a COUNT from the old one would over-count, so it is dropped.
-      const nr = parseRule(f.rrule)
-      const made = await planner.create({ ...body, rrule: nr ? formatRule(rule?.count ? { ...nr, count: undefined } : nr) : null })
+      // The old series stops the day before (in its own zone); the new one carries the rest of COUNT and the
+      // skipped dates after the split.
+      const split = splitSeries(entry!, occurrenceDate(entry!, target.occurrence!, planner.tz), f.rrule, planner.tz)
+      const made = await planner.create({ ...body, rrule: split.newRule, exdates: split.newExdates })
       ok = Boolean(made)
-      if (ok && rule) {
-        const startKey = entry!.start_date ?? (entry!.start_at ? toWall(new Date(entry!.start_at), f.tz).date : f.startDate)
-        if (until < startKey) ok = Boolean(await planner.update(entry!, { deleted: true }))
-        else ok = Boolean(await planner.update(entry!, { rrule: formatRule({ ...rule, count: undefined, until }) }))
+      if (ok) {
+        if (!split.oldRule) ok = Boolean(await planner.update(entry!, { deleted: true }))
+        else ok = Boolean(await planner.update(entry!, { rrule: split.oldRule, exdates: split.oldExdates }))
       }
     }
     setBusy(false)
@@ -229,11 +240,9 @@ export function EntryEditor({ target, planner, onClose }: { target: EditorTarget
     if (!repeating || mode === "all") await planner.remove(entry)
     else if (mode === "this") await planner.update(entry, { exdates: [...new Set([...(entry.exdates ?? []), target.occurrence!.key])] }, "Occurrence deleted")
     else {
-      const rule = parseRule(entry.rrule)
-      const until = addDays(target.occurrence!.startDate, -1)
-      const startKey = entry.start_date ?? (entry.start_at ? toWall(new Date(entry.start_at), f.tz).date : until)
-      if (!rule || until < startKey) await planner.remove(entry)
-      else await planner.update(entry, { rrule: formatRule({ ...rule, count: undefined, until }) }, "Following events deleted")
+      const split = splitSeries(entry, occurrenceDate(entry, target.occurrence!, planner.tz), null, planner.tz)
+      if (!split.oldRule) await planner.remove(entry)
+      else await planner.update(entry, { rrule: split.oldRule, exdates: split.oldExdates }, "Following events deleted")
     }
     setBusy(false)
     onClose()

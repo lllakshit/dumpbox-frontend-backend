@@ -1,10 +1,12 @@
 import { z } from "zod"
 import { requireUser } from "@/lib/api/auth"
-import { fromDb, handler, ok, readJson } from "@/lib/api/http"
+import { ApiError, fromDb, handler, ok, readJson } from "@/lib/api/http"
 import { createEntrySchema, ensureLists, rowFromCreate } from "@/lib/api/planner"
 import { readImport, type EntryDraft } from "@/lib/planner/importers"
 import { isTimeZone } from "@/lib/planner/time"
 import { ENTRY_COLUMNS, LIST_COLORS, LIST_COLUMNS, type Entry, type PlannerList } from "@/lib/planner/types"
+
+export const maxDuration = 60
 
 const schema = z
   .object({
@@ -22,12 +24,15 @@ const schema = z
   })
   .refine((v) => v.text !== undefined || v.data !== undefined, "Send `text` or `data`")
 
-const BATCH = 200
+const WRITE_BATCH = 200
+/** Ids and UIDs go in the query string; small batches keep it short (UIDs can be 500 characters). */
+const LOOKUP_BATCH = 30
 
 /**
  * POST /v1/planner/import — imports events and tasks. `dry_run: true` returns what would be imported (and the
- * problems found) without saving. Importing the same file twice updates the same entries (matched by `id`, the
- * file's UID / external id), so nothing is duplicated.
+ * problems found) without saving; both run exactly the same checks, and a bad entry is skipped (listed in
+ * `errors`), never the whole file. Importing the same file twice updates the same entries (matched by the file's
+ * UID / external id, or by id when it is already yours), so nothing is duplicated.
  */
 export const POST = handler(async (request: Request) => {
   const { db } = await requireUser(request)
@@ -35,16 +40,41 @@ export const POST = handler(async (request: Request) => {
   const read = readImport(input.text ?? input.data, { tz: input.time_zone, defaultKind: input.default_kind, defaultEventMinutes: input.default_event_minutes })
   const errors = [...read.errors]
 
-  // Validate each draft exactly as a normal create would be.
+  // Same UID twice in one file: the later one wins.
+  const byExt = new Map<string, number>()
+  const drafts: EntryDraft[] = []
+  for (const d of read.drafts) {
+    if (d.external_id && byExt.has(d.external_id)) {
+      drafts[byExt.get(d.external_id)!] = d
+      errors.push(`“${d.title}”: appears twice in the file, the later copy is used`)
+      continue
+    }
+    if (d.external_id) byExt.set(d.external_id, drafts.length)
+    drafts.push(d)
+  }
+
+  let lists = await ensureLists(db)
+  const byName = (kind: "calendar" | "tasks", name: string | null | undefined): PlannerList | undefined =>
+    name ? lists.find((l) => l.kind === kind && l.name.toLowerCase() === name.toLowerCase()) : undefined
+
+  // Validate each draft exactly as a normal create is (schema, then timing rules).
   type Ok = { draft: EntryDraft; body: z.infer<typeof createEntrySchema> }
   const valid: Ok[] = []
-  read.drafts.forEach((d, i) => {
+  drafts.forEach((d, i) => {
     const rest: Partial<EntryDraft> = { ...d }
     delete rest.list_name
     delete rest.list_id
     const r = createEntrySchema.safeParse({ ...rest, time_zone: rest.time_zone ?? input.time_zone })
-    if (r.success) valid.push({ draft: d, body: r.data })
-    else errors.push(`“${d.title}” (${i + 1}): ${r.error.issues.map((x) => `${x.path.join(".") || "entry"} ${x.message}`).join("; ")}`)
+    if (!r.success) {
+      errors.push(`“${d.title}” (${i + 1}): ${r.error.issues.map((x) => `${x.path.join(".") || "entry"} ${x.message}`).join("; ")}`)
+      return
+    }
+    try {
+      rowFromCreate(r.data, lists)
+      valid.push({ draft: d, body: r.data })
+    } catch (e) {
+      errors.push(`“${d.title}” (${i + 1}): ${e instanceof ApiError ? e.message : "not valid"}`)
+    }
   })
 
   const summary = {
@@ -57,24 +87,20 @@ export const POST = handler(async (request: Request) => {
     return ok({ ...summary, dry_run: true, preview: valid.slice(0, 200).map((v) => ({ ...v.body, list_name: v.draft.list_name ?? null })) })
   }
 
-  let lists = await ensureLists(db)
   // Create calendars / lists named in the file that do not exist yet.
-  const want = new Map<string, "calendar" | "tasks">()
+  const want = new Map<string, { kind: "calendar" | "tasks"; name: string }>()
   for (const v of valid) {
     if (!v.draft.list_name) continue
     const kind = v.body.kind === "event" ? "calendar" : "tasks"
     if ((kind === "calendar" && input.calendar_id) || (kind === "tasks" && input.list_id)) continue
-    if (!lists.some((l) => l.kind === kind && l.name.toLowerCase() === v.draft.list_name!.toLowerCase())) want.set(`${kind}:${v.draft.list_name.toLowerCase()}`, kind)
+    if (!byName(kind, v.draft.list_name)) want.set(`${kind}:${v.draft.list_name.toLowerCase()}`, { kind, name: v.draft.list_name.slice(0, 80) })
   }
-  for (const [key, kind] of want) {
-    const name = valid.find((v) => v.draft.list_name?.toLowerCase() === key.split(":").slice(1).join(":"))!.draft.list_name!.slice(0, 80)
+  for (const { kind, name } of want.values()) {
     const n = lists.filter((l) => l.kind === kind).length
     const { error } = await db.from("planner_lists").insert({ kind, name, color: LIST_COLORS[n % LIST_COLORS.length], position: n + 1 }).select(LIST_COLUMNS).single()
     if (error && error.code !== "23505") throw fromDb(error)
   }
   if (want.size) lists = await ensureLists(db)
-  const byName = (kind: "calendar" | "tasks", name: string | null | undefined): PlannerList | undefined =>
-    name ? lists.find((l) => l.kind === kind && l.name.toLowerCase() === name.toLowerCase()) : undefined
 
   const rows = valid.map((v) => {
     const kind = v.body.kind === "event" ? "calendar" : "tasks"
@@ -82,31 +108,36 @@ export const POST = handler(async (request: Request) => {
     return rowFromCreate({ ...v.body, list_id: listId }, lists) as Record<string, unknown>
   })
 
-  // Re-imports update the entries they made before (same external id), including ones in the bin.
-  const ext = rows.map((r) => r.external_id as string | null).filter((x): x is string => Boolean(x))
-  const existing = new Map<string, string>()
-  for (let i = 0; i < ext.length; i += BATCH) {
-    const { data, error } = await db.from("planner_entries").select("id,external_id").in("external_id", ext.slice(i, i + BATCH))
-    if (error) throw fromDb(error)
-    for (const r of data ?? []) existing.set(r.external_id as string, r.id as string)
+  async function existing(column: "id" | "external_id", values: string[]) {
+    const found = new Map<string, string>()
+    for (let i = 0; i < values.length; i += LOOKUP_BATCH) {
+      const { data, error } = await db.from("planner_entries").select("id,external_id").in(column, values.slice(i, i + LOOKUP_BATCH))
+      if (error) throw fromDb(error)
+      for (const r of data ?? []) found.set(String(r[column]), r.id as string)
+    }
+    return found
   }
-  const saved: Entry[] = []
+  // Rows already in this account: by UID first, then by id. Ids from someone else's export are dropped (a new id
+  // is made), so moving data between accounts works.
+  const byUid = await existing("external_id", rows.map((r) => r.external_id as string | null).filter((x): x is string => Boolean(x)))
+  const mine = await existing("id", rows.map((r) => r.id as string | undefined).filter((x): x is string => Boolean(x)))
+  const seenIds = new Set<string>()
   const upserts = rows.map((r) => {
-    const id = r.external_id ? existing.get(r.external_id as string) : undefined
-    return id ? { ...r, id, deleted_at: null } : r
+    const uidMatch = r.external_id ? byUid.get(r.external_id as string) : undefined
+    let id = uidMatch ?? (r.id && mine.has(r.id as string) ? (r.id as string) : undefined)
+    if (id && seenIds.has(id)) id = undefined
+    if (id) seenIds.add(id)
+    const rest = { ...r }
+    delete rest.id
+    return id ? { ...rest, id, deleted_at: null } : rest
   })
-  // Count what already exists (by id) so the summary can say created vs updated.
-  const ids = upserts.map((r) => r.id as string | undefined).filter((x): x is string => Boolean(x))
-  let updated = 0
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const { data, error } = await db.from("planner_entries").select("id").in("id", ids.slice(i, i + BATCH))
-    if (error) throw fromDb(error)
-    updated += data?.length ?? 0
-  }
-  for (let i = 0; i < upserts.length; i += BATCH) {
-    const chunk = upserts.slice(i, i + BATCH)
-    const withId = chunk.filter((r) => r.id)
-    const fresh = chunk.filter((r) => !r.id)
+  const updated = upserts.filter((r) => "id" in r).length
+
+  const saved: Entry[] = []
+  for (let i = 0; i < upserts.length; i += WRITE_BATCH) {
+    const chunk = upserts.slice(i, i + WRITE_BATCH)
+    const withId = chunk.filter((r) => "id" in r)
+    const fresh = chunk.filter((r) => !("id" in r))
     if (withId.length) {
       const { data, error } = await db.from("planner_entries").upsert(withId, { onConflict: "id" }).select(ENTRY_COLUMNS)
       if (error) throw fromDb(error)

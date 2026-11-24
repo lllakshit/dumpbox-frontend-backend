@@ -104,3 +104,46 @@ describe("ICS", () => {
     expect(back).toMatchObject({ title: "Trip, day 1", start_date: "2026-12-20", end_date: "2026-12-22", reminders: [1440] })
   })
 })
+
+describe("ICS from Google / Outlook", () => {
+  it("moved and cancelled occurrences, Windows zone names", () => {
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:s1",
+      "SUMMARY:Weekly",
+      "DTSTART;TZID=India Standard Time:20261201T100000",
+      "DTEND;TZID=India Standard Time:20261201T110000",
+      "RRULE:FREQ=WEEKLY",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:s1",
+      "RECURRENCE-ID;TZID=India Standard Time:20261208T100000",
+      "SUMMARY:Weekly (moved)",
+      "DTSTART;TZID=India Standard Time:20261208T150000",
+      "DTEND;TZID=India Standard Time:20261208T160000",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:s1",
+      "RECURRENCE-ID;TZID=India Standard Time:20261215T100000",
+      "STATUS:CANCELLED",
+      "SUMMARY:Weekly",
+      "DTSTART;TZID=India Standard Time:20261215T100000",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n")
+    const r = parseIcs(ics, "UTC")
+    expect(r.drafts).toHaveLength(2)
+    expect(r.drafts[0]).toMatchObject({ external_id: "s1", start_at: "2026-12-01T04:30:00.000Z", exdates: ["2026-12-08T04:30Z", "2026-12-15T04:30Z"] })
+    expect(r.drafts[1]).toMatchObject({ title: "Weekly (moved)", start_at: "2026-12-08T09:30:00.000Z" })
+    expect(r.drafts[1].external_id).toContain("s1#")
+  })
+  it("exports repeats in the entry's own zone", () => {
+    const e = { id: "11111111-1111-1111-1111-111111111111", kind: "event", title: "Late call", all_day: false, start_at: "2026-11-29T21:30:00Z", end_at: "2026-11-29T22:00:00Z", time_zone: "Asia/Kolkata", rrule: "FREQ=WEEKLY;BYDAY=MO", reminders: [], exdates: ["2026-12-06T21:30Z"], notes: null, location: null, external_id: null, deleted_at: null, start_date: null, end_date: null, completed_at: null } as unknown as Entry
+    const out = toIcs([e])
+    expect(out).toContain("DTSTART;TZID=Asia/Kolkata:20261130T030000")
+    expect(out).toContain("EXDATE;TZID=Asia/Kolkata:20261207T030000")
+    const back = parseIcs(out, "UTC").drafts[0]
+    expect(back).toMatchObject({ start_at: "2026-11-29T21:30:00.000Z", exdates: ["2026-12-06T21:30Z"] })
+  })
+})

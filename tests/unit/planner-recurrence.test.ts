@@ -115,3 +115,33 @@ describe("repeating task completion", () => {
     expect(r?.start_at).toBe("2026-11-27T03:30:00.000Z")
   })
 })
+
+describe("long series", () => {
+  it("a daily series from 2008 still shows in 2026, and COUNT still counts from the start", () => {
+    const e = entry({ all_day: true, start_date: "2008-01-01", rrule: "FREQ=DAILY" })
+    expect(occurrences(e, "2026-12-01", "2026-12-03", "UTC").map((o) => o.startDate)).toEqual(["2026-12-01", "2026-12-02", "2026-12-03"])
+    const c = entry({ all_day: true, start_date: "2026-01-01", rrule: "FREQ=DAILY;COUNT=10" })
+    expect(occurrences(c, "2026-01-09", "2026-01-31", "UTC").map((o) => o.startDate)).toEqual(["2026-01-09", "2026-01-10"])
+  })
+})
+
+import { occurrenceDate, shiftExdates, splitSeries } from "@/lib/planner/series"
+
+describe("editing part of a series", () => {
+  it("cuts in the entry's own zone, carries COUNT and skipped dates over", () => {
+    // Weekly Monday 10:00 New York, seen from India (Monday 20:30 IST).
+    const e = entry({ start_at: "2026-11-30T15:00:00Z", time_zone: "America/New_York", rrule: "FREQ=WEEKLY;COUNT=6", exdates: ["2026-12-07T15:00Z", "2026-12-21T15:00Z"] })
+    const occ = occurrences(e, "2026-12-14", "2026-12-14", "Asia/Kolkata")[0]
+    const d = occurrenceDate(e, { key: occ.key, start: occ.start.toISOString() }, "Asia/Kolkata")
+    expect(d).toBe("2026-12-14")
+    const s = splitSeries(e, d, e.rrule, "Asia/Kolkata")
+    expect(s.oldRule).toBe("FREQ=WEEKLY;UNTIL=20261213")
+    expect(s.newRule).toBe("FREQ=WEEKLY;COUNT=4")
+    expect(s.oldExdates).toEqual(["2026-12-07T15:00Z"])
+    expect(s.newExdates).toEqual(["2026-12-21T15:00Z"])
+    expect(splitSeries(e, "2026-11-30", e.rrule, "UTC").oldRule).toBeNull()
+  })
+  it("moving the whole series moves its skipped dates", () => {
+    expect(shiftExdates(["2026-12-07T15:00Z", "2026-12-10"], { ms: 3600_000, days: 1 })).toEqual(["2026-12-07T16:00Z", "2026-12-11"])
+  })
+})
