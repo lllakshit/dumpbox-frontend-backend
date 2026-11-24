@@ -3,6 +3,7 @@ import { listUserObjects, removeObjects } from "@/lib/api/storage-admin"
 import { ApiError, fromDb, handler, noContent, ok, readJson } from "@/lib/api/http"
 import { profileSchema } from "@/lib/api/schemas"
 import { adminClient } from "@/lib/supabase/server"
+import { DEFAULT_PREFS } from "@/lib/planner/types"
 
 async function usage(db: Awaited<ReturnType<typeof requireUser>>["db"]) {
   const { data, error } = await db.rpc("account_usage").single()
@@ -24,19 +25,39 @@ export const GET = handler(async (request: Request) => {
       name: (u.user_metadata?.name as string | undefined) ?? (u.user_metadata?.full_name as string | undefined) ?? null,
       avatar_url: (u.user_metadata?.avatar_url as string | undefined) ?? null,
       time_zone: (u.user_metadata?.time_zone as string | undefined) ?? null,
+      planner: { ...DEFAULT_PREFS, ...((u.user_metadata?.planner as object | undefined) ?? {}) },
       created_at: u.created_at,
     },
     usage: await usage(db),
   })
 })
 
-/** PATCH /v1/me — name and time zone. */
+/**
+ * PATCH /v1/me — name, time zone and planner preferences (planner fields merge with the ones already saved).
+ * Written with the server key for the caller's own verified id: a per-request client holds no session to update.
+ */
 export const PATCH = handler(async (request: Request) => {
-  const { db } = await requireUser(request)
+  const { userId } = await requireUser(request)
   const input = profileSchema.parse(await readJson(request))
-  const { data, error } = await db.auth.updateUser({ data: input })
+  const admin = adminClient()
+  const { data: cur, error: ge } = await admin.auth.admin.getUserById(userId)
+  if (ge || !cur.user) throw new ApiError("unauthorized", "Session expired, sign in again")
+  const before = (cur.user.user_metadata ?? {}) as Record<string, unknown>
+  const md: Record<string, unknown> = { ...before }
+  if (input.name !== undefined) md.name = input.name
+  if (input.time_zone !== undefined) md.time_zone = input.time_zone
+  if (input.planner) md.planner = { ...DEFAULT_PREFS, ...((before.planner as object | undefined) ?? {}), ...input.planner }
+  const { data, error } = await admin.auth.admin.updateUserById(userId, { user_metadata: md })
   if (error || !data.user) throw new ApiError("internal_error", "Could not update the profile")
-  return ok({ user: { id: data.user.id, name: data.user.user_metadata?.name ?? null, time_zone: data.user.user_metadata?.time_zone ?? null } })
+  const saved = (data.user.user_metadata ?? {}) as Record<string, unknown>
+  return ok({
+    user: {
+      id: data.user.id,
+      name: (saved.name as string | undefined) ?? null,
+      time_zone: (saved.time_zone as string | undefined) ?? null,
+      planner: { ...DEFAULT_PREFS, ...((saved.planner as object | undefined) ?? {}) },
+    },
+  })
 })
 
 /**

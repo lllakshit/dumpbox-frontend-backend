@@ -27,6 +27,7 @@ export const openapi = {
     { name: "Search and sync" },
     { name: "Sharing" },
     { name: "Account" },
+    { name: "Calendar and tasks" },
   ],
   paths: {
     "/v1/items": {
@@ -229,6 +230,111 @@ export const openapi = {
         responses: { 200: json({ type: "object", properties: { tag: ref("Tag") } }), 409: err, ...errors },
       },
       delete: { tags: ["Organize"], summary: "Delete a tag (items stay)", responses: { 204: { description: "Deleted" }, ...errors } },
+    },
+    "/v1/planner/lists": {
+      get: { tags: ["Calendar and tasks"], summary: "Calendars and task lists (defaults created on first use)", responses: { 200: json({ type: "object", properties: { lists: { type: "array", items: ref("PlannerList") } } }), ...errors } },
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Create a calendar or task list",
+        requestBody: body({ type: "object", required: ["kind", "name"], properties: { kind: { enum: ["calendar", "tasks"] }, name: { type: "string" }, color: { type: "string" } } }),
+        responses: { 201: json({ type: "object", properties: { list: ref("PlannerList") } }), 409: err, ...errors },
+      },
+    },
+    "/v1/planner/lists/{id}": {
+      parameters: [idParam()],
+      patch: {
+        tags: ["Calendar and tasks"],
+        summary: "Rename, recolour, hide or reorder a list",
+        requestBody: body({ type: "object", properties: { name: { type: "string" }, color: { type: "string" }, hidden: { type: "boolean" }, position: { type: "integer" } } }),
+        responses: { 200: json({ type: "object", properties: { list: ref("PlannerList") } }), ...errors },
+      },
+      delete: { tags: ["Calendar and tasks"], summary: "Delete a list; its entries go to the bin (not the defaults)", responses: { 204: { description: "Deleted" }, 409: err, ...errors } },
+    },
+    "/v1/planner/entries": {
+      get: {
+        tags: ["Calendar and tasks"],
+        summary: "Entries overlapping a date range (plus every repeating entry), or all entries",
+        parameters: [
+          { name: "from", in: "query", schema: { type: "string", format: "date" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date" } },
+          { name: "kind", in: "query", schema: { enum: ["event", "task"] } },
+        ],
+        responses: { 200: json({ type: "object", properties: { entries: { type: "array", items: ref("Entry") } } }), ...errors },
+      },
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Create an event or task (idempotent when `id` is sent)",
+        requestBody: body(ref("EntryInput")),
+        responses: { 200: json({ type: "object", properties: { entry: ref("Entry"), created: { const: false } } }, "Already existed"), 201: json({ type: "object", properties: { entry: ref("Entry"), created: { const: true } } }, "Created"), ...errors },
+      },
+    },
+    "/v1/planner/entries/{id}": {
+      parameters: [idParam()],
+      get: { tags: ["Calendar and tasks"], summary: "One entry", responses: { 200: json({ type: "object", properties: { entry: ref("Entry") } }), ...errors } },
+      patch: {
+        tags: ["Calendar and tasks"],
+        summary: "Change an entry; `completed: true` on a repeating task returns `next_entry`; `deleted: false` restores",
+        requestBody: body({ allOf: [ref("EntryInput")], properties: { deleted: { type: "boolean" }, base_version: { type: "integer" } } }),
+        responses: { 200: json({ type: "object", properties: { entry: ref("Entry"), next_entry: { oneOf: [ref("Entry"), { type: "null" }] }, merged: { type: "boolean" } } }), ...errors },
+      },
+      delete: { tags: ["Calendar and tasks"], summary: "Move to the bin (with subtasks)", responses: { 200: json({ type: "object", properties: { entry: ref("Entry") } }), ...errors } },
+    },
+    "/v1/planner/changes": {
+      get: {
+        tags: ["Calendar and tasks"],
+        summary: "Sync: entries changed since a token, plus all lists",
+        parameters: [{ name: "since", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer", maximum: 500 } }],
+        responses: {
+          200: json({
+            type: "object",
+            properties: { entries: { type: "array", items: ref("Entry") }, lists: { type: "array", items: ref("PlannerList") }, next_since: { type: ["string", "null"] }, has_more: { type: "boolean" }, reset: { type: "boolean" } },
+          }),
+          ...errors,
+        },
+      },
+    },
+    "/v1/planner/parse": {
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Quick add: read text like “Dentist tomorrow 5pm remind me 1h before”",
+        requestBody: body({ type: "object", required: ["text"], properties: { text: { type: "string" }, time_zone: { type: "string" }, now: { type: "string", format: "date-time" }, kind: { enum: ["event", "task"] } } }),
+        responses: { 200: json({ type: "object", properties: { parsed: { type: "object" }, entry: { type: "object" } } }), ...errors },
+      },
+    },
+    "/v1/planner/import": {
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Import JSON (DumpBox, Google Calendar/Tasks, simple objects), .ics or text lines; `dry_run` previews",
+        requestBody: body({ type: "object", properties: { text: { type: "string" }, data: {}, dry_run: { type: "boolean" }, time_zone: { type: "string" }, default_kind: { enum: ["event", "task"] }, calendar_id: { type: "string" }, list_id: { type: "string" } } }),
+        responses: { 200: json({ type: "object", properties: { format: { type: "string" }, events: { type: "integer" }, tasks: { type: "integer" }, created: { type: "integer" }, updated: { type: "integer" }, errors: { type: "array", items: { type: "string" } } } }), ...errors },
+      },
+    },
+    "/v1/planner/export": {
+      get: {
+        tags: ["Calendar and tasks"],
+        summary: "Export every event and task as JSON or .ics",
+        parameters: [{ name: "format", in: "query", schema: { enum: ["json", "ics"], default: "json" } }, { name: "list", in: "query", schema: { type: "string", format: "uuid" } }],
+        responses: { 200: { description: "The file", content: { "application/json": { schema: { type: "object" } }, "text/calendar": { schema: { type: "string" } } } }, ...errors },
+      },
+    },
+    "/v1/planner/feed-token": {
+      get: { tags: ["Calendar and tasks"], summary: "Secret calendar addresses (labels and dates, not the tokens)", responses: { 200: json({ type: "object", properties: { active: { type: "boolean" }, addresses: { type: "array", items: { type: "object" } } } }), ...errors } },
+      post: {
+        tags: ["Calendar and tasks"],
+        summary: "Make a secret calendar address for one device or app (token shown once)",
+        requestBody: body({ type: "object", properties: { label: { type: "string" } } }),
+        responses: { 201: json({ type: "object", properties: { id: { type: "string" }, label: { type: "string" }, token: { type: "string" }, json_url: { type: "string" }, ics_url: { type: "string" } } }), ...errors },
+      },
+      delete: { tags: ["Calendar and tasks"], summary: "Turn one address off (`?id=`), or all", parameters: [{ name: "id", in: "query", schema: { type: "string", format: "uuid" } }], responses: { 204: { description: "Off" }, ...errors } },
+    },
+    "/v1/planner/feed": {
+      get: {
+        tags: ["Calendar and tasks"],
+        summary: "Read-only calendar by secret token (no sign-in): JSON for the phone, .ics for calendar apps",
+        security: [],
+        parameters: [{ name: "token", in: "query", required: true, schema: { type: "string" } }, { name: "format", in: "query", schema: { enum: ["json", "ics"] } }],
+        responses: { 200: { description: "Entries, lists and preferences (JSON) or a calendar (.ics)" }, 404: err },
+      },
     },
     "/v1/collections": {
       get: {
@@ -482,6 +588,42 @@ export const openapi = {
       Tag: {
         type: "object",
         properties: { id: { type: "string" }, name: { type: "string" }, color: { type: ["string", "null"] }, item_count: { type: "integer" } },
+      },
+      PlannerList: {
+        type: "object",
+        properties: { id: { type: "string" }, kind: { enum: ["calendar", "tasks"] }, name: { type: "string" }, color: { type: "string" }, is_default: { type: "boolean" }, hidden: { type: "boolean" }, position: { type: "integer" }, version: { type: "integer" } },
+      },
+      EntryInput: {
+        type: "object",
+        required: ["kind", "title"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          kind: { enum: ["event", "task"] },
+          title: { type: "string" },
+          list_id: { type: ["string", "null"] },
+          parent_id: { type: ["string", "null"], description: "Subtask of this task" },
+          notes: { type: ["string", "null"] },
+          location: { type: ["string", "null"] },
+          all_day: { type: "boolean" },
+          start_at: { type: ["string", "null"], format: "date-time" },
+          end_at: { type: ["string", "null"], format: "date-time" },
+          start_date: { type: ["string", "null"], format: "date" },
+          end_date: { type: ["string", "null"], format: "date", description: "Inclusive" },
+          time_zone: { type: ["string", "null"] },
+          rrule: { type: ["string", "null"], description: "RFC 5545 subset: FREQ, INTERVAL, BYDAY, BYMONTHDAY, BYMONTH, COUNT, UNTIL" },
+          exdates: { type: "array", items: { type: "string" } },
+          reminders: { type: "array", items: { type: "integer" }, description: "Minutes before (max 5, up to 4 weeks)" },
+          color: { type: ["string", "null"] },
+          completed: { type: "boolean" },
+          starred: { type: "boolean" },
+          position: { type: "number" },
+          source_item_id: { type: ["string", "null"] },
+          external_id: { type: ["string", "null"] },
+        },
+      },
+      Entry: {
+        allOf: [{ $ref: "#/components/schemas/EntryInput" }],
+        properties: { completed_at: { type: ["string", "null"] }, deleted_at: { type: ["string", "null"] }, version: { type: "integer" }, created_at: { type: "string" }, updated_at: { type: "string" } },
       },
       Collection: {
         type: "object",

@@ -39,5 +39,9 @@ export const Icon = {
   restore: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M4 10a8 8 0 1 1 2 7" /><path d="M4 4v6h6" /></I>,
   menu: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M4 7h16M4 12h16M4 17h16" /></I>,
   cloudOff: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M3 3l18 18M8 8a5 5 0 0 0-3 9h11M19.4 15.4A4 4 0 0 0 17 9h-1a6 6 0 0 0-5.3-3.9" /></I>,
+  calendar: (p: SVGProps<SVGSVGElement>) => <I {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /><path d="M8 14h3v3H8z" /></I>,
+  task: (p: SVGProps<SVGSVGElement>) => <I {...p}><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></I>,
+  upload: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M12 20V9M7 14l5-5 5 5M5 4h14" /></I>,
+  bell: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></I>,
   select: (p: SVGProps<SVGSVGElement>) => <I {...p}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8 12 3 3 5-6" /></I>,
 }

@@ -13,8 +13,16 @@ import { ItemCard, type ItemAction, type PendingState } from "./ItemCard"
 import { SearchPanel } from "./SearchPanel"
 import { SettingsPanel } from "./SettingsPanel"
 import { dayLabel, Modal, Button, Toasts, type Toast } from "./ui"
+import { clearPlannerCache, usePlanner } from "@/lib/client/planner"
+import { CalendarView } from "../planner/CalendarView"
+import { EntryEditor, type EditorTarget } from "../planner/EntryEditor"
+import { ImportDialog } from "../planner/ImportDialog"
+import { PlannerSettings } from "../planner/PlannerSettings"
+import { quickBody } from "../planner/QuickAdd"
+import { TasksView } from "../planner/TasksView"
 
-type Panel = "feed" | "search" | "collections" | "settings"
+type Panel = "feed" | "search" | "collections" | "settings" | "calendar" | "tasks"
+const PANEL_KEY = "dumpbox.panel"
 type Local = { item: Item; state: PendingState; error?: string; files?: File[] }
 type DialogState =
   | { kind: "tags"; item: Item }
@@ -87,6 +95,8 @@ export function DumpBoxApp() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [navOpen, setNavOpen] = useState(false)
   const [searchKey, setSearchKey] = useState(0)
+  const [editor, setEditor] = useState<EditorTarget | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const viewRef = useRef(view)
   viewRef.current = view
@@ -100,6 +110,25 @@ export function DumpBoxApp() {
     setToasts((t) => [...t.slice(-2), { id, text, tone, action }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), action ? 7000 : 3500)
   }, [])
+
+  const planner = usePlanner(userId, notify)
+
+  // Reopen on the last section used (calendar and tasks are often the place to come back to).
+  useEffect(() => {
+    try {
+      const p = localStorage.getItem(PANEL_KEY)
+      if (p === "calendar" || p === "tasks") setPanel(p)
+    } catch {
+      // ignore
+    }
+  }, [])
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_KEY, panel)
+    } catch {
+      // ignore
+    }
+  }, [panel])
 
   // ---------- auth ----------
   useEffect(() => {
@@ -511,9 +540,27 @@ export function DumpBoxApp() {
         case "history":
           setDialog({ kind: "history", item })
           break
+        case "event":
+        case "task": {
+          // Turn the item into an event or task: its text is read like quick add ("call bank friday 11am").
+          const full = [item.title, item.body, item.link?.title, item.url].filter(Boolean).join("\n").trim()
+          const first = (item.title || item.body || item.link?.title || item.url || item.location?.label || TYPE_LABEL[item.type]).split("\n")[0].slice(0, 300)
+          const { body } = quickBody(planner, first, a)
+          const rest = full.split("\n").slice(item.title ? 0 : 1).join("\n").trim()
+          setEditor({
+            draft: {
+              ...(body as object),
+              kind: (body.kind as "event" | "task") ?? a,
+              notes: rest || null,
+              location: (body.location as string) ?? item.location?.label ?? null,
+              source_item_id: item.id,
+            },
+          })
+          break
+        }
       }
     },
-    [applyItems, mutate, notify],
+    [applyItems, mutate, notify, planner],
   )
 
   // ---------- bulk ----------
@@ -546,6 +593,7 @@ export function DumpBoxApp() {
 
   const signOut = useCallback(async () => {
     feedCache.clear()
+    clearPlannerCache()
     await browserSupabase().auth.signOut()
     router.replace("/login")
   }, [router])
@@ -614,6 +662,8 @@ export function DumpBoxApp() {
       <div className="space-y-0.5">
         {navButton("Feed", isView({ kind: "feed" }), () => go({ kind: "feed" }), <Icon.feed />)}
         {navButton("Search", panel === "search", () => { setPanel("search"); setNavOpen(false) }, <Icon.search />)}
+        {navButton("Calendar", panel === "calendar", () => { setPanel("calendar"); setNavOpen(false) }, <Icon.calendar />)}
+        {navButton("Tasks", panel === "tasks", () => { setPanel("tasks"); setNavOpen(false) }, <Icon.task />, planner.entries.filter((e) => e.kind === "task" && !e.completed_at && !e.parent_id).length || undefined)}
         {navButton("Pinned", isView({ kind: "pinned" }), () => go({ kind: "pinned" }), <Icon.pin />)}
         {navButton("Starred", isView({ kind: "starred" }), () => go({ kind: "starred" }), <Icon.star />)}
       </div>
@@ -659,7 +709,8 @@ export function DumpBoxApp() {
     </nav>
   )
 
-  const title = panel === "feed" ? viewTitle(view) : panel === "search" ? "Search" : panel === "collections" ? "Collections & tags" : "Settings"
+  const title =
+    panel === "feed" ? viewTitle(view) : panel === "search" ? "Search" : panel === "collections" ? "Collections & tags" : panel === "calendar" ? "Calendar" : panel === "tasks" ? "Tasks" : "Settings"
   const emptyText =
     view.kind === "trash" ? "Trash is empty. Deleted items stay here for 30 days." : view.kind === "archived" ? "Nothing archived." : view.kind === "feed" ? "Your DumpBox is empty. Type below, paste a link, or drop a file to start." : "Nothing here yet."
 
@@ -703,6 +754,11 @@ export function DumpBoxApp() {
               <Icon.select />
             </button>
           ) : null}
+          {panel === "calendar" || panel === "tasks" ? (
+            <button onClick={() => setImportOpen(true)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm text-ink-2 hover:bg-panel-2" aria-label="Import or export" title="Import / export (JSON, .ics)">
+              <Icon.upload /> <span className="hidden sm:inline">Import</span>
+            </button>
+          ) : null}
           <button onClick={() => setPanel("search")} className="rounded-lg p-1.5 text-ink-2 hover:bg-panel-2 md:hidden" aria-label="Search">
             <Icon.search />
           </button>
@@ -731,7 +787,9 @@ export function DumpBoxApp() {
         ) : null}
 
         {/* In the feed the scroll box itself is column-reverse, so it opens at the newest item and stays there, like a chat. */}
-        <div className={`min-h-0 flex-1 overflow-y-auto scroll-thin ${panel === "feed" ? "flex flex-col-reverse" : ""}`}>
+        <div className={`min-h-0 flex-1 scroll-thin ${panel === "calendar" || panel === "tasks" ? "overflow-hidden" : "overflow-y-auto"} ${panel === "feed" ? "flex flex-col-reverse" : ""}`}>
+          {panel === "calendar" ? <CalendarView planner={planner} onOpen={setEditor} /> : null}
+          {panel === "tasks" ? <TasksView planner={planner} onOpen={setEditor} /> : null}
           {panel === "feed" ? (
             <div className="flex flex-col-reverse gap-3 px-3 py-4 pl-12 md:px-6 md:pl-16">
               {feedRows}
@@ -820,7 +878,12 @@ export function DumpBoxApp() {
               }
             />
           ) : null}
-          {panel === "settings" ? <SettingsPanel notify={notify} onSignOut={signOut} onDeleteAccount={() => setDialog({ kind: "delete-account" })} /> : null}
+          {panel === "settings" ? (
+            <>
+              <SettingsPanel notify={notify} onSignOut={signOut} onDeleteAccount={() => setDialog({ kind: "delete-account" })} />
+              <PlannerSettings planner={planner} onImport={() => setImportOpen(true)} />
+            </>
+          ) : null}
         </div>
 
         {panel === "feed" && view.kind !== "trash" ? <Composer onCapture={onCapture} /> : null}
@@ -829,6 +892,8 @@ export function DumpBoxApp() {
           {(
             [
               ["feed", "Feed", <Icon.feed key="f" />],
+              ["calendar", "Calendar", <Icon.calendar key="cal" />],
+              ["tasks", "Tasks", <Icon.task key="t" />],
               ["search", "Search", <Icon.search key="s" />],
               ["collections", "Collections", <Icon.folder key="c" />],
               ["settings", "Settings", <Icon.settings key="g" />],
@@ -838,7 +903,7 @@ export function DumpBoxApp() {
               key={p}
               onClick={() => (p === "feed" ? go({ kind: "feed" }) : setPanel(p))}
               aria-current={panel === p ? "page" : undefined}
-              className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] ${panel === p ? "text-accent" : "text-ink-3"}`}
+              className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2 text-[10px] ${panel === p ? "text-accent" : "text-ink-3"}`}
             >
               {icon}
               {label}
@@ -941,6 +1006,9 @@ export function DumpBoxApp() {
       {dialog?.kind === "confirm" ? <ConfirmDialog title={dialog.title} text={dialog.text} confirmLabel={dialog.label} danger={dialog.danger} onConfirm={dialog.run} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "rename" ? <RenameDialog title={dialog.title} value={dialog.value} onClose={() => setDialog(null)} onSave={dialog.run} notify={notify} /> : null}
       {dialog?.kind === "delete-account" ? <DeleteAccountDialog onClose={() => setDialog(null)} onDeleted={signOut} /> : null}
+
+      {editor ? <EntryEditor key={editor.entry?.id ?? "new"} target={editor} planner={planner} onClose={() => setEditor(null)} /> : null}
+      {importOpen ? <ImportDialog planner={planner} onClose={() => setImportOpen(false)} /> : null}
 
       <Toasts toasts={toasts} dismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>

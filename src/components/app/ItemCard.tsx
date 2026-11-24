@@ -56,6 +56,8 @@ export type ItemAction =
   | "trash"
   | "restore"
   | "forever"
+  | "event"
+  | "task"
 
 export type PendingState = "sending" | "queued" | "failed"
 
@@ -141,6 +143,8 @@ export function ItemCard({
         { key: "collections", label: "Collections…" },
         { key: "share", label: "Share link…" },
         { key: "copy", label: "Copy text" },
+        { key: "event", label: "Make event…" },
+        { key: "task", label: "Make task…" },
         ...(item.version > 1 ? [{ key: "history" as const, label: "Version history" }] : []),
         { key: "archive", label: item.archived_at ? "Unarchive" : "Archive" },
         { key: "trash", label: "Move to trash" },
