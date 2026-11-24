@@ -157,3 +157,19 @@ revoke all on public.planner_lists, public.planner_entries from anon;
 -- Realtime nudges (only used where the direct connection works; otherwise devices poll).
 alter publication supabase_realtime add table public.planner_entries;
 alter publication supabase_realtime add table public.planner_lists;
+
+-- ---------------------------------------------------------------------------
+-- Secret calendar feed: a read-only address for the phone's background reminder check and for subscribing from
+-- other calendar apps. Only a SHA-256 hash of the token is stored; it can be replaced or turned off at any time.
+-- ---------------------------------------------------------------------------
+create table public.planner_feed_tokens (
+  user_id uuid primary key default auth.uid() references auth.users (id) on delete cascade,
+  token_hash text not null unique check (token_hash ~ '^[0-9a-f]{64}$'),
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz
+);
+
+alter table public.planner_feed_tokens enable row level security;
+create policy planner_feed_tokens_owner on public.planner_feed_tokens for all to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+revoke all on public.planner_feed_tokens from anon;

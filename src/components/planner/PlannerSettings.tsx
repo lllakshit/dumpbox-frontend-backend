@@ -1,6 +1,7 @@
 "use client"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { Planner } from "@/lib/client/planner"
+import { call } from "@/lib/client/api"
 import { REMINDER_CHOICES, reminderLabel } from "@/lib/planner/types"
 import { Button } from "../app/ui"
 
@@ -100,9 +101,78 @@ export function PlannerSettings({ planner, onImport }: { planner: Planner; onImp
           </Button>
         ) : null}
       </div>
+      <FeedAddress />
       <div className="flex flex-wrap gap-2">
         <Button onClick={onImport}>Import / export events and tasks</Button>
       </div>
     </section>
+  )
+}
+
+/** Secret, read-only calendar address: for other calendar apps (Google Calendar → Add from URL). */
+function FeedAddress() {
+  const [state, setState] = useState<{ active: boolean; created_at: string | null } | null>(null)
+  const [url, setUrl] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  useEffect(() => {
+    call<{ active: boolean; created_at: string | null }>("GET", "/v1/planner/feed-token")
+      .then(setState)
+      .catch(() => setState({ active: false, created_at: null }))
+  }, [])
+  const make = async () => {
+    setBusy(true)
+    try {
+      const r = await call<{ ics_url: string }>("POST", "/v1/planner/feed-token")
+      setUrl(r.ics_url)
+      setState({ active: true, created_at: new Date().toISOString() })
+      setMsg("New address made. Any older address stops working.")
+    } catch {
+      setMsg("Could not make the address")
+    } finally {
+      setBusy(false)
+    }
+  }
+  const off = async () => {
+    setBusy(true)
+    try {
+      await call("DELETE", "/v1/planner/feed-token")
+      setUrl(null)
+      setState({ active: false, created_at: null })
+      setMsg("Address turned off. The phone app makes a new one for its background reminders next time it syncs.")
+    } catch {
+      setMsg("Could not turn it off")
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="rounded-xl border border-line p-3 text-sm">
+      <p className="font-medium">Secret calendar address</p>
+      <p className="mt-1 text-ink-2">
+        A private, read-only link to your events and tasks (.ics). Add it in Google Calendar (Other calendars → From URL), Outlook or Apple Calendar to see DumpBox there. The phone app uses one too, for reminders while it is closed. Anyone with the link can read your calendar.
+      </p>
+      {url ? (
+        <div className="mt-2 flex gap-2">
+          <label htmlFor="feed-url" className="sr-only">
+            Calendar address
+          </label>
+          <input id="feed-url" readOnly value={url} className="min-w-0 flex-1 rounded-xl border border-line bg-bg px-3 py-1.5 font-mono text-xs" onFocus={(e) => e.target.select()} />
+          <Button onClick={() => navigator.clipboard.writeText(url).then(() => setMsg("Copied"))}>Copy</Button>
+        </div>
+      ) : null}
+      <p className="mt-2 text-xs text-ink-3">{state?.active ? `On since ${state.created_at?.slice(0, 10) ?? ""}. The address is only shown when it is made.` : "Off"}</p>
+      {msg ? <p className="mt-1 text-xs text-ink-2">{msg}</p> : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button onClick={make} disabled={busy}>
+          {state?.active ? "Make a new address" : "Make address"}
+        </Button>
+        {state?.active ? (
+          <Button kind="ghost" onClick={off} disabled={busy}>
+            Turn off
+          </Button>
+        ) : null}
+      </div>
+    </div>
   )
 }

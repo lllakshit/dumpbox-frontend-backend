@@ -176,3 +176,23 @@ describe("planner", () => {
     expect((await A("GET", "/v1/me")).json.user.planner.week_start).toBe(0)
   })
 })
+
+describe("planner feed", () => {
+  it("secret address reads only its owner's calendar and can be turned off", async () => {
+    await A("POST", "/v1/planner/entries", { kind: "event", title: "Feed check", start_at: "2026-12-05T04:30:00Z" })
+    const t = await A("POST", "/v1/planner/feed-token")
+    expect(t.status).toBe(201)
+    expect(t.json.ics_url).toContain("format=ics")
+    const res = await fetch(`${BASE}/v1/planner/feed?token=${t.json.token}`)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.entries.map((e: Json) => e.title)).toContain("Feed check")
+    expect(body.prefs.all_day_reminder_time).toBeTruthy()
+    const ics = await (await fetch(`${BASE}/v1/planner/feed?token=${t.json.token}&format=ics`)).text()
+    expect(ics).toContain("SUMMARY:Feed check")
+    expect((await fetch(`${BASE}/v1/planner/feed?token=${"x".repeat(43)}`)).status).toBe(404)
+    expect((await B("GET", "/v1/planner/feed-token")).json.active).toBe(false)
+    expect((await A("DELETE", "/v1/planner/feed-token")).status).toBe(204)
+    expect((await fetch(`${BASE}/v1/planner/feed?token=${t.json.token}`)).status).toBe(404)
+  })
+})

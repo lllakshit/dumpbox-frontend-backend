@@ -317,6 +317,20 @@ export const openapi = {
         responses: { 200: { description: "The file", content: { "application/json": { schema: { type: "object" } }, "text/calendar": { schema: { type: "string" } } } }, ...errors },
       },
     },
+    "/v1/planner/feed-token": {
+      get: { tags: ["Calendar and tasks"], summary: "Whether a secret calendar address exists", responses: { 200: json({ type: "object", properties: { active: { type: "boolean" }, created_at: { type: ["string", "null"] }, last_used_at: { type: ["string", "null"] } } }), ...errors } },
+      post: { tags: ["Calendar and tasks"], summary: "Make or replace the secret calendar address (token shown once)", responses: { 201: json({ type: "object", properties: { token: { type: "string" }, json_url: { type: "string" }, ics_url: { type: "string" } } }), ...errors } },
+      delete: { tags: ["Calendar and tasks"], summary: "Turn the secret calendar address off", responses: { 204: { description: "Off" }, ...errors } },
+    },
+    "/v1/planner/feed": {
+      get: {
+        tags: ["Calendar and tasks"],
+        summary: "Read-only calendar by secret token (no sign-in): JSON for the phone, .ics for calendar apps",
+        security: [],
+        parameters: [{ name: "token", in: "query", required: true, schema: { type: "string" } }, { name: "format", in: "query", schema: { enum: ["json", "ics"] } }],
+        responses: { 200: { description: "Entries, lists and preferences (JSON) or a calendar (.ics)" }, 404: err },
+      },
+    },
     "/v1/collections": {
       get: {
         tags: ["Organize"],
