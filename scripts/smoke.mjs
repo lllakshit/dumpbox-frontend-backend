@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Production smoke test: a temporary account goes through capture, link preview, file upload, typo search, sync,
- * a share link (open, then revoke), and finally deletes itself with all its data.
+ * a share link (open, then revoke), calendar and tasks (quick add, repeats, reminders, import, secret feed, export,
+ * profile preferences), and finally deletes itself with all its data (which also checks deleting an account that
+ * has planner rows).
  * Env: APP_URL, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (to create the temporary user).
  */
 const { APP_URL, SUPABASE_URL: SB, SUPABASE_PUBLISHABLE_KEY: PUB, SUPABASE_SECRET_KEY: SEC } = process.env
@@ -64,6 +66,28 @@ try {
   await api("DELETE", `/v1/shares/${sh.body.share.id}`)
   check("revoked link stops working", (await fetch(`${B}/v1/public/shares/${token}`)).status === 404)
   check("cron endpoint refuses strangers", (await fetch(`${B}/v1/internal/purge`)).status === 401)
+
+  // ---- Calendar & tasks
+  const lists = await api("GET", "/v1/planner/lists")
+  check("planner: default calendar and task list", lists.body?.lists?.filter((l) => l.is_default).length === 2)
+  const parsed = await api("POST", "/v1/planner/parse", { text: "Dentist tomorrow 5pm remind me 1h before", time_zone: "Asia/Kolkata" })
+  check("planner: quick add read", parsed.body?.entry?.title === "Dentist" && parsed.body.entry.reminders?.[0] === 60, JSON.stringify(parsed.body?.entry?.reminders))
+  const ev = await api("POST", "/v1/planner/entries", { ...parsed.body.entry, list_name: undefined })
+  check("planner: event saved", ev.status === 201 && ev.body.entry.start_at !== null, String(ev.status))
+  const task = await api("POST", "/v1/planner/entries", { kind: "task", title: "Smoke rent", start_date: "2026-12-01", rrule: "FREQ=MONTHLY;COUNT=2", reminders: [0] })
+  const done = await api("PATCH", `/v1/planner/entries/${task.body?.entry?.id}`, { completed: true })
+  check("planner: repeating task makes the next one", done.body?.next_entry?.start_date === "2027-01-01", done.body?.next_entry?.start_date ?? String(done.status))
+  const pch = await api("GET", "/v1/planner/changes")
+  check("planner: sync pull", pch.status === 200 && pch.body.entries.length === 3, `${pch.body?.entries?.length} entries`)
+  const imp = await api("POST", "/v1/planner/import", { time_zone: "Asia/Kolkata", text: "Standup every weekday 10am\ntask: renew passport 15 jan" })
+  check("planner: import", imp.body?.created === 2, JSON.stringify({ created: imp.body?.created, errors: imp.body?.errors }))
+  const ft = await api("POST", "/v1/planner/feed-token", { label: "smoke" })
+  const feed = await j(await fetch(ft.body.json_url))
+  check("planner: secret feed (no sign-in)", feed.status === 200 && feed.body.entries.length >= 4 && new URL(ft.body.json_url).origin === new URL(B).origin, `${feed.status}, ${ft.body.json_url.split("?")[0]}`)
+  const ics = await (await fetch(ft.body.ics_url)).text()
+  check("planner: .ics feed", ics.includes("BEGIN:VCALENDAR") && ics.includes("SUMMARY:Dentist"))
+  const prefs = await api("PATCH", "/v1/me", { planner: { week_start: 0 } })
+  check("profile: planner preferences saved", prefs.body?.user?.planner?.week_start === 0)
 } catch (e) {
   check("unexpected error", false, e instanceof Error ? e.message : String(e))
 } finally {
