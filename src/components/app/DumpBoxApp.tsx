@@ -20,8 +20,10 @@ import { ImportDialog } from "../planner/ImportDialog"
 import { PlannerSettings } from "../planner/PlannerSettings"
 import { quickBody } from "../planner/QuickAdd"
 import { TasksView } from "../planner/TasksView"
+import { EmailSettings } from "../email/EmailSettings"
+import { EmailView } from "../email/EmailView"
 
-type Panel = "feed" | "search" | "collections" | "settings" | "calendar" | "tasks"
+type Panel = "feed" | "search" | "collections" | "settings" | "calendar" | "tasks" | "email"
 const PANEL_KEY = "dumpbox.panel"
 type Local = { item: Item; state: PendingState; error?: string; files?: File[] }
 type DialogState =
@@ -117,7 +119,7 @@ export function DumpBoxApp() {
   useEffect(() => {
     try {
       const p = localStorage.getItem(PANEL_KEY)
-      if (p === "calendar" || p === "tasks") setPanel(p)
+      if (p === "calendar" || p === "tasks" || p === "email") setPanel(p)
     } catch {
       // ignore
     }
@@ -583,6 +585,15 @@ export function DumpBoxApp() {
   )
 
   // ---------- navigation ----------
+  const openEmailSettings = useCallback(() => {
+    setPanel("settings")
+    // Scroll only the settings column: scrollIntoView would also move the whole page on phones.
+    setTimeout(() => {
+      const el = document.getElementById("email-settings")
+      const box = el?.closest<HTMLElement>(".overflow-y-auto")
+      if (el && box) box.scrollTo({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: "smooth" })
+    }, 150)
+  }, [])
   const go = useCallback((v: View) => {
     setView(v)
     setPanel("feed")
@@ -664,6 +675,7 @@ export function DumpBoxApp() {
         {navButton("Search", panel === "search", () => { setPanel("search"); setNavOpen(false) }, <Icon.search />)}
         {navButton("Calendar", panel === "calendar", () => { setPanel("calendar"); setNavOpen(false) }, <Icon.calendar />)}
         {navButton("Tasks", panel === "tasks", () => { setPanel("tasks"); setNavOpen(false) }, <Icon.task />, planner.entries.filter((e) => e.kind === "task" && !e.completed_at && !e.parent_id).length || undefined)}
+        {navButton("Email", panel === "email", () => { setPanel("email"); setNavOpen(false) }, <Icon.mail />)}
         {navButton("Pinned", isView({ kind: "pinned" }), () => go({ kind: "pinned" }), <Icon.pin />)}
         {navButton("Starred", isView({ kind: "starred" }), () => go({ kind: "starred" }), <Icon.star />)}
       </div>
@@ -710,7 +722,7 @@ export function DumpBoxApp() {
   )
 
   const title =
-    panel === "feed" ? viewTitle(view) : panel === "search" ? "Search" : panel === "collections" ? "Collections & tags" : panel === "calendar" ? "Calendar" : panel === "tasks" ? "Tasks" : "Settings"
+    panel === "feed" ? viewTitle(view) : panel === "search" ? "Search" : panel === "collections" ? "Collections & tags" : panel === "calendar" ? "Calendar" : panel === "tasks" ? "Tasks" : panel === "email" ? "Email" : "Settings"
   const emptyText =
     view.kind === "trash" ? "Trash is empty. Deleted items stay here for 30 days." : view.kind === "archived" ? "Nothing archived." : view.kind === "feed" ? "Your DumpBox is empty. Type below, paste a link, or drop a file to start." : "Nothing here yet."
 
@@ -787,9 +799,10 @@ export function DumpBoxApp() {
         ) : null}
 
         {/* In the feed the scroll box itself is column-reverse, so it opens at the newest item and stays there, like a chat. */}
-        <div className={`min-h-0 flex-1 scroll-thin ${panel === "calendar" || panel === "tasks" ? "overflow-hidden" : "overflow-y-auto"} ${panel === "feed" ? "flex flex-col-reverse" : ""}`}>
+        <div className={`min-h-0 flex-1 scroll-thin ${panel === "calendar" || panel === "tasks" || panel === "email" ? "overflow-hidden" : "overflow-y-auto"} ${panel === "feed" ? "flex flex-col-reverse" : ""}`}>
           {panel === "calendar" ? <CalendarView planner={planner} onOpen={setEditor} /> : null}
           {panel === "tasks" ? <TasksView planner={planner} onOpen={setEditor} /> : null}
+          {panel === "email" ? <EmailView planner={planner} notify={notify} onSetup={openEmailSettings} /> : null}
           {panel === "feed" ? (
             <div className="flex flex-col-reverse gap-3 px-3 py-4 pl-12 md:px-6 md:pl-16">
               {feedRows}
@@ -882,6 +895,7 @@ export function DumpBoxApp() {
             <>
               <SettingsPanel notify={notify} onSignOut={signOut} onDeleteAccount={() => setDialog({ kind: "delete-account" })} />
               <PlannerSettings planner={planner} onImport={() => setImportOpen(true)} />
+              <EmailSettings notify={notify} />
             </>
           ) : null}
         </div>
@@ -894,6 +908,7 @@ export function DumpBoxApp() {
               ["feed", "Feed", <Icon.feed key="f" />],
               ["calendar", "Calendar", <Icon.calendar key="cal" />],
               ["tasks", "Tasks", <Icon.task key="t" />],
+              ["email", "Email", <Icon.mail key="m" />],
               ["search", "Search", <Icon.search key="s" />],
               ["collections", "Collections", <Icon.folder key="c" />],
               ["settings", "Settings", <Icon.settings key="g" />],
