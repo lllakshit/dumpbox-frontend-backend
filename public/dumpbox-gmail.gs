@@ -52,7 +52,9 @@ function syncRecent() {
     const ctx = context_();
     const since = Date.now() - CONFIG.RECENT_DAYS * 86400000;
     const seen = {};
-    for (const label of ctx.labels) {
+    for (let li = 0; li < ctx.labels.length; li++) {
+      const label = ctx.labels[li];
+      const via = ctx.labelNames[li];
       for (let start = 0; ; start += 50) {
         const threads = label.getThreads(start, 50); // newest first
         let older = false;
@@ -61,7 +63,7 @@ function syncRecent() {
           if (seen[thread.getId()]) continue;
           seen[thread.getId()] = true;
           if (outOfTime_(ctx)) { send_(ctx); return report_(ctx, 'stopped early, the next run continues'); }
-          queue_(thread, ctx);
+          queue_(thread, ctx, via);
         }
         if (older || threads.length < 50) break;
       }
@@ -98,12 +100,13 @@ function fullSync() {
 
     for (; cursor.label < ctx.labels.length; cursor.label++, cursor.start = 0) {
       const label = ctx.labels[cursor.label];
+      const via = ctx.labelNames[cursor.label];
       for (;;) {
         const threads = label.getThreads(cursor.start, 100);
         for (let k = 0; k < threads.length; k++) {
           if (outOfTime_(ctx)) return pause_(ctx, cursor);
           ctx.next = { phase: 'labels', i: 0, label: cursor.label, start: cursor.start + k + 1 };
-          queue_(threads[k], ctx);
+          queue_(threads[k], ctx, via);
           checkpoint_(ctx);
         }
         cursor.start += threads.length;
@@ -136,14 +139,49 @@ function resetSyncState() {
 
 // ───────────────────────── One conversation ─────────────────────────
 
-/** Adds a conversation to the outgoing batch when it changed since it was last sent. */
-function queue_(thread, ctx) {
-  const names = thread.getLabels().map(function (l) { return l.getName(); });
+/**
+ * Adds a conversation to the outgoing batch when it changed since it was last sent. If Gmail cannot read one
+ * conversation, it is left out of this run (noted in the log) and tried again next time; the run carries on.
+ * via: the label this conversation was found under, if any.
+ */
+function queue_(thread, ctx, via) {
+  let item = null;
+  try {
+    item = read_(thread, ctx, via);
+  } catch (e) {
+    ctx.unreadable++;
+    if (ctx.errors.length < 5) ctx.errors.push('Gmail could not read one conversation, left for next time: ' + String(e && e.message || e).slice(0, 200));
+    return;
+  }
+  if (!item) return;
+  // Send what is waiting first when this conversation would push the request over the limit.
+  if (ctx.batch.length && ctx.batchBytes + item.size > REQUEST_BYTES) send_(ctx);
+  ctx.batch.push({ key: item.key, hash: item.hash, body: item.body });
+  ctx.batchBytes += item.size;
+  if (ctx.batch.length >= CONFIG.BATCH_THREADS || ctx.batchBytes > REQUEST_BYTES) send_(ctx);
+}
+
+/**
+ * A conversation's label names. Gmail sometimes returns a label it cannot name (deleted, or broken on its side):
+ * that one is skipped instead of stopping the run. The label the conversation was found under is always kept.
+ */
+function labelNames_(thread, via) {
+  const names = [];
+  thread.getLabels().forEach(function (l) {
+    try { names.push(l.getName()); } catch (e) { /* a label Gmail cannot name */ }
+  });
+  if (via && names.indexOf(via) < 0) names.push(via);
+  return names;
+}
+
+/** Reads one conversation from Gmail; null when it is not one of yours or nothing changed. */
+function read_(thread, ctx, via) {
+  const names = labelNames_(thread, via);
   const synced = names.filter(ctx.isSynced);
   const key = 't:' + thread.getId();
   const before = ctx.props.getProperty(key);
-  if (!synced.length && !before) return; // not one of yours and never sent
-  if (ctx.batch.some(function (b) { return b.key === key; })) return; // already waiting (it has two synced labels)
+  if (!synced.length && !before) return null; // not one of yours and never sent
+  if (ctx.batch.some(function (b) { return b.key === key; })) return null; // already waiting (it has two synced labels)
 
   const messages = thread.getMessages();
   const last = messages[messages.length - 1];
@@ -156,7 +194,7 @@ function queue_(thread, ctx) {
   const unread = thread.isUnread();
   const inScope = synced.length > 0;
   const hash = digest_([labels.join('|'), priority, starred, important, unread, inScope, messages.length, last.getId()].join('#'));
-  if (before === hash) return; // nothing changed in Gmail
+  if (before === hash) return null; // nothing changed in Gmail
 
   const body = {
     external_id: thread.getId(),
@@ -187,12 +225,7 @@ function queue_(thread, ctx) {
       };
     }),
   };
-  const size = fitToRequest_(body);
-  // Send what is waiting first when this conversation would push the request over the limit.
-  if (ctx.batch.length && ctx.batchBytes + size > REQUEST_BYTES) send_(ctx);
-  ctx.batch.push({ key: key, hash: hash, body: body });
-  ctx.batchBytes += size;
-  if (ctx.batch.length >= CONFIG.BATCH_THREADS || ctx.batchBytes > REQUEST_BYTES) send_(ctx);
+  return { key: key, hash: hash, body: body, size: fitToRequest_(body) };
 }
 
 /** Real UTF-8 size of a conversation; a very long one keeps fewer, shorter messages until it fits one request. */
@@ -295,7 +328,13 @@ function context_() {
     const n = name.toLowerCase();
     return roots.some(function (r) { return n === r || (CONFIG.INCLUDE_CHILD_LABELS && n.indexOf(r + '/') === 0); });
   };
-  const labels = GmailApp.getUserLabels().filter(function (l) { return isSynced(l.getName()); });
+  const labels = [];
+  const labelNames = [];
+  GmailApp.getUserLabels().forEach(function (l) {
+    let name = null;
+    try { name = l.getName(); } catch (e) { name = null; } // a label Gmail cannot name
+    if (name !== null && isSynced(name)) { labels.push(l); labelNames.push(name); }
+  });
   if (!labels.length) Logger.log('None of SYNC_LABELS / PRIORITY exist in Gmail yet: ' + roots.join(', '));
   const props = PropertiesService.getScriptProperties();
   return {
@@ -303,19 +342,21 @@ function context_() {
     props: props,
     remembered: Object.keys(props.getProperties()).filter(function (k) { return k.indexOf('t:') === 0; }).length,
     labels: labels,
+    labelNames: labelNames,
     isSynced: isSynced,
     batch: [],
     batchBytes: 0,
     trackCursor: false,
     next: null,
     sinceSave: 0,
-    created: 0, updated: 0, skipped: 0, failed: 0,
+    created: 0, updated: 0, skipped: 0, failed: 0, unreadable: 0,
     errors: [],
   };
 }
 
 function report_(ctx, note) {
   Logger.log(note + ' · new ' + ctx.created + ' · updated ' + ctx.updated + ' · skipped (deleted in DumpBox) ' + ctx.skipped + ' · refused ' + ctx.failed +
+    (ctx.unreadable ? ' · could not read ' + ctx.unreadable : '') +
     (ctx.errors.length ? '\n' + ctx.errors.join('\n') : ''));
 }
 
