@@ -28,6 +28,7 @@ export const openapi = {
     { name: "Sharing" },
     { name: "Account" },
     { name: "Calendar and tasks" },
+    { name: "Email" },
   ],
   paths: {
     "/v1/items": {
@@ -335,6 +336,54 @@ export const openapi = {
         parameters: [{ name: "token", in: "query", required: true, schema: { type: "string" } }, { name: "format", in: "query", schema: { enum: ["json", "ics"] } }],
         responses: { 200: { description: "Entries, lists and preferences (JSON) or a calendar (.ics)" }, 404: err },
       },
+    },
+    "/v1/email/import": {
+      post: {
+        tags: ["Email"],
+        summary: "Import conversations from the Gmail script (authenticated with an import key, not a sign-in)",
+        description: "`Authorization: Bearer <import key>`. Up to 50 conversations and 4 MB per request. Same Gmail thread updates the same conversation; conversations deleted in DumpBox are skipped.",
+        requestBody: body({ type: "object", required: ["threads"], properties: { threads: { type: "array", items: { type: "object" } } } }),
+        responses: { 200: json({ type: "object", properties: { created: { type: "integer" }, updated: { type: "integer" }, skipped: { type: "integer" }, messages: { type: "integer" } } }), ...errors },
+      },
+    },
+    "/v1/email/import-keys": {
+      get: { tags: ["Email"], summary: "Import keys for the Gmail script (labels and dates, not the keys)", responses: { 200: json({ type: "object", properties: { keys: { type: "array", items: { type: "object" } } } }), ...errors } },
+      post: {
+        tags: ["Email"],
+        summary: "Make an import key (shown once; at most 5)",
+        requestBody: body({ type: "object", properties: { label: { type: "string" } } }),
+        responses: { 201: json({ type: "object", properties: { id: { type: "string" }, label: { type: "string" }, key: { type: "string" }, api_url: { type: "string" } } }), ...errors },
+      },
+      delete: { tags: ["Email"], summary: "Turn one key off (`?id=`), or all", parameters: [{ name: "id", in: "query", schema: { type: "string", format: "uuid" } }], responses: { 204: { description: "Off" }, ...errors } },
+    },
+    "/v1/email/counts": {
+      get: { tags: ["Email"], summary: "Counts per label, priority and view for the Email sidebar", responses: { 200: json({ type: "object" }), ...errors } },
+    },
+    "/v1/email/threads": {
+      get: {
+        tags: ["Email"],
+        summary: "Conversations, newest activity first",
+        parameters: [
+          { name: "view", in: "query", schema: { enum: ["inbox", "new", "unread", "starred", "pinned", "archived"], default: "inbox" } },
+          { name: "label", in: "query", schema: { type: "string" } },
+          { name: "priority", in: "query", schema: { type: "integer", minimum: 1, maximum: 3 } },
+          { name: "q", in: "query", schema: { type: "string" } },
+          { name: "cursor", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 100 } },
+        ],
+        responses: { 200: json({ type: "object", properties: { threads: { type: "array", items: { type: "object" } }, next_cursor: { type: ["string", "null"] } } }), ...errors },
+      },
+    },
+    "/v1/email/threads/{id}": {
+      get: { tags: ["Email"], summary: "One conversation with all its messages (marks it opened)", parameters: [idParam()], responses: { 200: json({ type: "object" }), ...errors } },
+      patch: {
+        tags: ["Email"],
+        summary: "Pin or archive in DumpBox (Gmail is not changed)",
+        parameters: [idParam()],
+        requestBody: body({ type: "object", properties: { pinned: { type: "boolean" }, archived: { type: "boolean" } } }),
+        responses: { 200: json({ type: "object" }), ...errors },
+      },
+      delete: { tags: ["Email"], summary: "Delete from DumpBox for good (it is not imported again; Gmail is not changed)", parameters: [idParam()], responses: { 204: { description: "Deleted" }, ...errors } },
     },
     "/v1/collections": {
       get: {

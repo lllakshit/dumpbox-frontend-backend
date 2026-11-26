@@ -44,4 +44,8 @@ export const Icon = {
   upload: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M12 20V9M7 14l5-5 5 5M5 4h14" /></I>,
   bell: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></I>,
   select: (p: SVGProps<SVGSVGElement>) => <I {...p}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8 12 3 3 5-6" /></I>,
+  mail: (p: SVGProps<SVGSVGElement>) => <I {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></I>,
+  dot: (p: SVGProps<SVGSVGElement>) => <I {...p}><circle cx="12" cy="12" r="4" /></I>,
+  external: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" /></I>,
+  back: (p: SVGProps<SVGSVGElement>) => <I {...p}><path d="M15 5 8 12l7 7" /></I>,
 }
