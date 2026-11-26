@@ -1,16 +1,30 @@
 "use client"
 import { useEffect, useState } from "react"
 import { emailApi, type ImportKey } from "@/lib/client/email"
+import { cleanLabels, DEFAULT_SCRIPT_CONFIG, fillScript, type ScriptConfig } from "@/lib/email/script-config"
 import { Button } from "../app/ui"
 
 const SCRIPT_PATH = "/dumpbox-gmail.gs"
+const CONFIG_KEY = "dumpbox.email.scriptConfig"
 
-/** The Gmail script with this key and this site's address filled in, ready to paste into script.google.com. */
-async function filledScript(key: string, apiUrl: string) {
+/** The Gmail script with the key, this site's address and the labels below filled in: paste and run, no editing. */
+async function filledScript(key: string, apiUrl: string, cfg: ScriptConfig) {
   const res = await fetch(SCRIPT_PATH, { cache: "no-store" })
   if (!res.ok) throw new Error("Could not load the script")
-  return (await res.text()).replace("PASTE_IMPORT_KEY", key).replace("https://dumpbox-app.vercel.app", apiUrl)
+  return fillScript(await res.text(), key, apiUrl, cfg)
 }
+
+function readConfig(): ScriptConfig {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) ?? "null") as Partial<ScriptConfig> | null
+    if (saved && Array.isArray(saved.syncLabels) && Array.isArray(saved.priority)) return { ...DEFAULT_SCRIPT_CONFIG, ...saved } as ScriptConfig
+  } catch {
+    // fall back to the default setup
+  }
+  return DEFAULT_SCRIPT_CONFIG
+}
+
+const field = "w-full rounded-xl border border-line bg-bg px-3 py-1.5 text-sm"
 
 /** Settings → Email: import keys for the Gmail script and how to set it up. */
 export function EmailSettings({ notify }: { notify: (text: string, tone?: "ok" | "error") => void }) {
@@ -18,6 +32,19 @@ export function EmailSettings({ notify }: { notify: (text: string, tone?: "ok" |
   const [fresh, setFresh] = useState<{ key: string; api_url: string } | null>(null)
   const [label, setLabel] = useState("Gmail script")
   const [busy, setBusy] = useState(false)
+  // Settings only renders after sign-in on the client, so reading browser storage on first render is safe.
+  const [cfg, setCfgState] = useState<ScriptConfig>(readConfig)
+  const [labelsText, setLabelsText] = useState(() => cfg.syncLabels.join("\n"))
+  const setCfg = (patch: Partial<ScriptConfig>) =>
+    setCfgState((prev) => {
+      const next = { ...prev, ...patch }
+      try {
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(next))
+      } catch {
+        // private window: kept for this visit only
+      }
+      return next
+    })
 
   const load = () =>
     emailApi
@@ -56,16 +83,16 @@ export function EmailSettings({ notify }: { notify: (text: string, tone?: "ok" |
   const copyScript = async () => {
     if (!fresh) return
     try {
-      await navigator.clipboard.writeText(await filledScript(fresh.key, fresh.api_url))
-      notify("Script copied with your key in it", "ok")
-    } catch {
-      notify("Could not copy. Use Download instead.", "error")
+      await navigator.clipboard.writeText(await filledScript(fresh.key, fresh.api_url, cfg))
+      notify("Script copied with your key and labels in it", "ok")
+    } catch (e) {
+      notify(e instanceof Error && e.message.startsWith("The Gmail script") ? e.message : "Could not copy. Use Download instead.", "error")
     }
   }
   const downloadScript = async () => {
     if (!fresh) return
     try {
-      const blob = new Blob([await filledScript(fresh.key, fresh.api_url)], { type: "text/plain" })
+      const blob = new Blob([await filledScript(fresh.key, fresh.api_url, cfg)], { type: "text/plain" })
       const a = document.createElement("a")
       a.href = URL.createObjectURL(blob)
       a.download = "dumpbox-gmail.gs"
@@ -85,7 +112,7 @@ export function EmailSettings({ notify }: { notify: (text: string, tone?: "ok" |
       </p>
 
       <ol className="list-decimal space-y-1 pl-5 text-sm text-ink-2">
-        <li>Make an import key below, then press <b>Copy script</b> (your key is filled in).</li>
+        <li>Check the labels below, make an import key, then press <b>Copy script</b> (key and labels are filled in).</li>
         <li>
           Open{" "}
           <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener noreferrer" className="text-accent underline">
@@ -94,15 +121,65 @@ export function EmailSettings({ notify }: { notify: (text: string, tone?: "ok" |
           , replace everything in <code>Code.gs</code> with the script, and save.
         </li>
         <li>
-          In <code>CONFIG</code>, list your labels in <code>SYNC_LABELS</code> and your priority labels in <code>PRIORITY</code>.
-        </li>
-        <li>
           Choose <code>fullSync</code> → <b>Run</b>, and allow access (it is your own script: Advanced → Go to project). Run it again if the log says “paused”.
         </li>
         <li>
           Choose <code>installTriggers</code> → <b>Run</b>. From then on it runs by itself.
         </li>
       </ol>
+
+      <div className="rounded-xl border border-line p-3 text-sm">
+        <p className="font-medium">What to bring in</p>
+        <p className="mt-1 text-ink-2">Exact Gmail label names, one per line. A parent label brings its sub-labels. Very large labels (thousands of mails) slow the first import and fill storage.</p>
+        <label htmlFor="email-sync-labels" className="mt-2 block text-xs font-medium text-ink-2">
+          Labels
+        </label>
+        <textarea
+          id="email-sync-labels"
+          rows={Math.min(10, Math.max(4, labelsText.split("\n").length + 1))}
+          value={labelsText}
+          onChange={(e) => {
+            setLabelsText(e.target.value)
+            setCfg({ syncLabels: cleanLabels(e.target.value) })
+          }}
+          className={`${field} mt-1 font-mono text-xs`}
+        />
+        <p className="mt-3 text-xs font-medium text-ink-2">Priority labels (also brought in)</p>
+        <div className="mt-1 grid gap-2 sm:grid-cols-3">
+          {(["High", "Medium", "Low"] as const).map((name, i) => (
+            <div key={name}>
+              <label htmlFor={`email-priority-${i}`} className="block text-xs text-ink-3">
+                {name}
+              </label>
+              <input
+                id={`email-priority-${i}`}
+                value={cfg.priority[i]}
+                placeholder="(not used)"
+                onChange={(e) => {
+                  const p = [...cfg.priority] as ScriptConfig["priority"]
+                  p[i] = e.target.value
+                  setCfg({ priority: p })
+                }}
+                className={field}
+              />
+            </div>
+          ))}
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={!cfg.sendAllLabels} onChange={(e) => setCfg({ sendAllLabels: !e.target.checked })} />
+          Show only these labels on each conversation (hides your other Gmail labels)
+        </label>
+        <button
+          type="button"
+          className="mt-2 text-xs text-accent hover:underline"
+          onClick={() => {
+            setCfg(DEFAULT_SCRIPT_CONFIG)
+            setLabelsText(DEFAULT_SCRIPT_CONFIG.syncLabels.join("\n"))
+          }}
+        >
+          Reset to the recommended setup
+        </button>
+      </div>
 
       <div className="rounded-xl border border-line p-3 text-sm">
         <p className="font-medium">Import keys</p>
