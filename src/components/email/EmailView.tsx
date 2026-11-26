@@ -1,6 +1,7 @@
 "use client"
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ApiFailure } from "@/lib/client/api"
+import { browserSupabase, liveSupabase } from "@/lib/client/supabase"
 import {
   emailApi,
   fullDate,
@@ -140,20 +141,54 @@ export function EmailView({ planner, notify, onSetup }: { planner: Planner; noti
     }
   }, [filter, query])
 
-  // New mail arrives from the Gmail script in the background: refresh when the tab comes back and every 2 minutes.
+  // Web and phone stay in step: a change to any conversation (new mail from the import, pin, archive, opened,
+  // deleted, on any device) arrives as a live event and refreshes this screen. Where the direct live connection is
+  // blocked, it checks every 20 seconds while visible instead (every 2 minutes as a safety net when live).
+  const refreshRef = useRef(refreshTop)
   useEffect(() => {
+    refreshRef.current = refreshTop
+  }, [refreshTop])
+  useEffect(() => {
+    let live = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     const refresh = () => {
       if (document.visibilityState !== "visible") return
       loadCounts()
-      refreshTop()
+      refreshRef.current()
     }
-    const timer = setInterval(refresh, 120_000)
+    const nudge = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(refresh, 400)
+    }
+    const live$ = liveSupabase()
+    let channel: ReturnType<typeof live$.channel> | null = null
+    let closed = false
+    browserSupabase()
+      .auth.getSession()
+      .then(({ data }) => {
+        if (!data.session || closed) return
+        live$.realtime.setAuth(data.session.access_token)
+        channel = live$
+          .channel(`email:${data.session.user.id}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "email_threads", filter: `user_id=eq.${data.session.user.id}` }, nudge)
+          .subscribe((status) => {
+            live = status === "SUBSCRIBED"
+          })
+      })
+    let ticks = 0
+    const interval = setInterval(() => {
+      ticks++
+      if (!live || ticks % 6 === 0) refresh()
+    }, 20_000)
     document.addEventListener("visibilitychange", refresh)
     return () => {
-      clearInterval(timer)
+      closed = true
+      clearInterval(interval)
+      if (timer) clearTimeout(timer)
       document.removeEventListener("visibilitychange", refresh)
+      if (channel) live$.removeChannel(channel)
     }
-  }, [loadCounts, refreshTop])
+  }, [loadCounts])
 
   // Search as you type, after a short pause.
   useEffect(() => {
