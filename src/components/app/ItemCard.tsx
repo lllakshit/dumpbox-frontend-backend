@@ -1,23 +1,13 @@
 "use client"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { api } from "@/lib/client/api"
+import { fileUrls } from "./fileUrls"
 import type { FileMeta, Item } from "@/lib/client/types"
 import { Icon } from "./icons"
+import { PhotoViewer } from "./PhotoViewer"
 import { Linkified, formatBytes, timeLabel } from "./ui"
 
-/** Signed file URLs are cached for 50 minutes (they are valid for 60). */
-const urlCache = new Map<string, { view: string; download: string; at: number }>()
-async function fileUrls(id: string) {
-  const hit = urlCache.get(id)
-  if (hit && Date.now() - hit.at < 50 * 60_000) return hit
-  const r = await api.fileUrls(id)
-  const v = { view: r.view_url, download: r.download_url, at: Date.now() }
-  urlCache.set(id, v)
-  return v
-}
-
-function useFileUrls(file: FileMeta | undefined, enabled = true) {
+export function useFileUrls(file: FileMeta | undefined, enabled = true) {
   const [urls, setUrls] = useState<{ view: string; download: string } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -158,7 +148,7 @@ export function ItemCard({
           aria-label={`${item.type} item`}
         >
           {item.title && item.type !== "link" ? <h3 className="mb-1 font-semibold leading-snug break-words">{item.title}</h3> : null}
-          <Body item={item} />
+          <Body item={item} viewer={!selectable} />
           {highlight ? <p className="mt-2 border-t border-line pt-2 text-sm text-ink-2">{highlight}</p> : null}
 
           <footer className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
@@ -236,7 +226,7 @@ export function ItemCard({
   )
 }
 
-function Body({ item }: { item: Item }) {
+function Body({ item, viewer = true }: { item: Item; viewer?: boolean }) {
   switch (item.type) {
     case "note":
       return item.body ? (
@@ -256,7 +246,7 @@ function Body({ item }: { item: Item }) {
               <Linkified text={item.body} />
             </p>
           ) : null}
-          {item.files.length ? item.files.map((f) => <FileBody key={f.id} file={f} />) : <p className="text-sm text-ink-3">Uploading…</p>}
+          {item.files.length ? item.files.map((f) => <FileBody key={f.id} file={f} item={viewer ? item : undefined} />) : <p className="text-sm text-ink-3">Uploading…</p>}
         </div>
       )
   }
@@ -305,22 +295,36 @@ function PlaceBody({ item }: { item: Item }) {
   )
 }
 
-function FileBody({ file }: { file: FileMeta }) {
+/** Every image on one item, for the viewer. */
+function photosOf(item: Item) {
+  return item.files.filter((f) => f.mime_type.startsWith("image/")).map((file) => ({ file, item }))
+}
+
+function FileBody({ file, item }: { file: FileMeta; item?: Item }) {
+  const [viewing, setViewing] = useState(false)
   const isImage = file.mime_type.startsWith("image/")
   const isAudio = file.mime_type.startsWith("audio/")
   const isVideo = file.mime_type.startsWith("video/")
   const { urls, ref } = useFileUrls(file)
 
   if (isImage) {
-    const ratio = file.width && file.height ? `${file.width} / ${file.height}` : "4 / 3"
+    // The box takes the photo's own shape, so the whole photo shows. Click opens it full screen.
+    const ratio = file.width && file.height ? `${file.width} / ${file.height}` : undefined
     return (
       <div ref={ref}>
-        <a href={urls?.view ?? undefined} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-xl bg-panel-2" style={{ aspectRatio: ratio, maxHeight: 360 }}>
+        <button
+          type="button"
+          onClick={() => item && setViewing(true)}
+          aria-label={`Open photo ${file.file_name}`}
+          className={`block w-full overflow-hidden rounded-xl bg-panel-2 ${item ? "cursor-zoom-in" : ""}`}
+          style={ratio ? { aspectRatio: ratio, maxHeight: 360, maxWidth: `min(100%, ${Math.round((360 * file.width!) / file.height!)}px)` } : { minHeight: urls ? undefined : 160 }}
+        >
           {urls ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={urls.view} alt={file.file_name} loading="lazy" className="h-full w-full object-contain" />
+            <img src={urls.view} alt={file.file_name} loading="lazy" className={ratio ? "h-full w-full object-contain" : "mx-auto max-h-[360px] w-auto max-w-full object-contain"} />
           ) : null}
-        </a>
+        </button>
+        {viewing && item ? <PhotoViewer photos={photosOf(item)} start={Math.max(0, item.files.filter((f) => f.mime_type.startsWith("image/")).findIndex((f) => f.id === file.id))} onClose={() => setViewing(false)} /> : null}
       </div>
     )
   }

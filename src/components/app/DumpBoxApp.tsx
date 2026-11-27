@@ -9,7 +9,9 @@ import { CollectionsPanel } from "./CollectionsPanel"
 import { classifyText, Composer, type Capture } from "./Composer"
 import { CollectionDialog, ConfirmDialog, EditDialog, HistoryDialog, ShareDialog, TagDialog } from "./dialogs"
 import { Icon } from "./icons"
+import { AlbumCard } from "./AlbumCard"
 import { ItemCard, type ItemAction, type PendingState } from "./ItemCard"
+import { groupIntoAlbums } from "@/lib/client/albums"
 import { SearchPanel } from "./SearchPanel"
 import { SettingsPanel } from "./SettingsPanel"
 import { dayLabel, Modal, Button, Toasts, type Toast } from "./ui"
@@ -619,31 +621,39 @@ export function DumpBoxApp() {
       ...items.filter((i) => !visibleLocals.some((l) => l.item.id === i.id)).map((item) => ({ item })),
     ].sort((a, b) => sortNewest(a.item, b.item))
     const rows: ReactNode[] = []
-    all.forEach((row, i) => {
-      rows.push(
-        <ItemCard
-          key={row.item.id}
-          item={row.item}
-          pending={row.local ? { state: row.local.state, error: row.local.error } : undefined}
-          onRetry={row.local ? () => retry(row.local!) : undefined}
-          onAction={onAction}
-          selectable={selecting && !row.local}
-          selected={selected.has(row.item.id)}
-          onToggleSelect={() =>
-            setSelected((s) => {
-              const n = new Set(s)
-              if (n.has(row.item.id)) n.delete(row.item.id)
-              else n.add(row.item.id)
-              return n
-            })
-          }
-        />,
-      )
-      const next = all[i + 1]
-      if (!next || new Date(next.item.created_at).toDateString() !== new Date(row.item.created_at).toDateString()) {
+    // Photos sent together show as one album; not while selecting, and never items still uploading.
+    const groups = selecting ? all.map((r) => [r]) : groupIntoAlbums(all, (r) => r.item, (r) => !r.local)
+    groups.forEach((group, i) => {
+      const row = group[0]
+      if (group.length > 1) {
+        rows.push(<AlbumCard key={`album-${row.item.id}`} newestFirst={group.map((g) => g.item)} onAction={onAction} />)
+      } else {
         rows.push(
-          <div key={`day-${row.item.id}`} className="sticky top-0 z-10 flex justify-center py-1" role="separator">
-            <span className="rounded-full border border-line bg-panel px-3 py-0.5 text-xs text-ink-3">{dayLabel(row.item.created_at)}</span>
+          <ItemCard
+            key={row.item.id}
+            item={row.item}
+            pending={row.local ? { state: row.local.state, error: row.local.error } : undefined}
+            onRetry={row.local ? () => retry(row.local!) : undefined}
+            onAction={onAction}
+            selectable={selecting && !row.local}
+            selected={selected.has(row.item.id)}
+            onToggleSelect={() =>
+              setSelected((s) => {
+                const n = new Set(s)
+                if (n.has(row.item.id)) n.delete(row.item.id)
+                else n.add(row.item.id)
+                return n
+              })
+            }
+          />,
+        )
+      }
+      const oldest = group[group.length - 1]
+      const next = groups[i + 1]?.[0]
+      if (!next || new Date(next.item.created_at).toDateString() !== new Date(oldest.item.created_at).toDateString()) {
+        rows.push(
+          <div key={`day-${oldest.item.id}`} className="sticky top-0 z-10 flex justify-center py-1" role="separator">
+            <span className="rounded-full border border-line bg-panel px-3 py-0.5 text-xs text-ink-3">{dayLabel(oldest.item.created_at)}</span>
           </div>,
         )
       }
